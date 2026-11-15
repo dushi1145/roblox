@@ -21982,7 +21982,6 @@ TracersDep:AddDivider()
 TracersDep:AddLabel('命中特效与辉光')
 Toggles.TracersImpact = TracersDep:AddToggle('TracersImpact', { Text = '命中火花', Default = true })
 Options.TracerImpactSize = TracersDep:AddSlider('TracerImpactSize', { Text = '命中特效大小', Default = 0.8, Min = 0.2, Max = 3.0, Rounding = 2, Compact = false })
-Options.TracerSparkCount = TracersDep:AddSlider('TracerSparkCount', { Text = '火花数量', Default = 8, Min = 0, Max = 24, Rounding = 0, Compact = false, Tooltip = '每发子弹命中点飞出的火花条数，0 = 只留闪光' })
 Toggles.TracersGlow = TracersDep:AddToggle('TracersGlow', { Text = '灯光辉光', Default = false })
 
 local GlowDep = TracersDep:AddDependencyBox()
@@ -25759,93 +25758,33 @@ local function makeLaserBeam(p1, p2, weaponColor)
 end
 
 
-local sparkBudget = 0
-
--- 命中点：小闪光 + 一圈往外飞的火花（只要「命中火花」开着就出，跟弹道总开关无关）
 local function spawnImpactEffect(pos, color)
     if not (Toggles.TracersImpact and Toggles.TracersImpact.Value) then return end
-    if not pos then return end
+    local sz = Options.TracerImpactSize and Options.TracerImpactSize.Value or 0.8
+    local part = Instance.new('Part')
+    part.Name = 'TracerImpact'
+    part.Material = Enum.Material.Neon
+    part.Shape = Enum.PartType.Ball
+    part.Size = Vector3.new(sz, sz, sz)
+    part.CFrame = CFrame.new(pos)
+    part.Anchored = true
+    part.CanCollide = false
+    part.CanQuery = false
+    part.CanTouch = false
+    part.CastShadow = false
+    part.Color = color
+    part.Parent = workspace.CurrentCamera
 
     local TweenService = game:GetService('TweenService')
-    local host = workspace.CurrentCamera or workspace
-    local sz = math.clamp(tonumber(Options.TracerImpactSize and Options.TracerImpactSize.Value) or 0.8, 0.2, 3)
-
-    -- 闪光
-    pcall(function()
-        local flash = Instance.new('Part')
-        flash.Name = 'YZImpactFlash'
-        flash.Material = Enum.Material.Neon
-        flash.Shape = Enum.PartType.Ball
-        flash.Size = Vector3.new(sz * 0.7, sz * 0.7, sz * 0.7)
-        flash.CFrame = CFrame.new(pos)
-        flash.Anchored = true
-        flash.CanCollide = false
-        flash.CanQuery = false
-        flash.CanTouch = false
-        flash.CastShadow = false
-        flash.Color = color or Color3.fromRGB(255, 232, 190)
-        flash.Transparency = 0.05
-        flash.Parent = host
-
-        local tw = TweenService:Create(flash, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-            Size = Vector3.new(sz * 1.8, sz * 1.8, sz * 1.8),
-            Transparency = 1,
-        })
-        tw:Play()
-        task.delay(0.22, function()
-            if flash.Parent then flash:Destroy() end
-        end)
+    local tw = TweenService:Create(part, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+        Size = Vector3.new(sz * 1.6, sz * 1.6, sz * 1.6),
+        Transparency = 1
+    })
+    tw:Play()
+    tw.Completed:Connect(function()
+        part:Destroy()
     end)
-
-    -- 火花：细长亮条往外飞
-    if sparkBudget > 160 then return end
-    local count = math.floor(tonumber(Options.TracerSparkCount and Options.TracerSparkCount.Value) or 8)
-    local baseColor = color or Color3.fromRGB(255, 190, 90)
-
-    for _ = 1, count do
-        sparkBudget += 1
-
-        local dir = Vector3.new(
-            (math.random() - 0.5) * 2,
-            math.random() * 1.5 + 0.15,
-            (math.random() - 0.5) * 2
-        )
-        if dir.Magnitude < 0.01 then
-            dir = Vector3.new(1, 0.5, 0)
-        end
-        dir = dir.Unit
-
-        local len = (0.28 + math.random() * 0.5) * sz
-        local spark = Instance.new('Part')
-        spark.Name = 'YZSpark'
-        spark.Material = Enum.Material.Neon
-        spark.Size = Vector3.new(0.05 * sz + 0.02, 0.05 * sz + 0.02, len)
-        spark.CFrame = CFrame.lookAt(pos, pos + dir)
-        spark.Anchored = true
-        spark.CanCollide = false
-        spark.CanQuery = false
-        spark.CanTouch = false
-        spark.CastShadow = false
-        spark.Color = baseColor
-        spark.Transparency = 0.05
-        spark.Parent = host
-
-        local travel = len * (2 + math.random() * 2)
-        local life = 0.14 + math.random() * 0.16
-
-        local tw = TweenService:Create(spark, TweenInfo.new(life, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-            CFrame = CFrame.lookAt(pos + dir * travel, pos + dir * travel + dir),
-            Transparency = 1,
-        })
-        tw:Play()
-
-        task.delay(life + 0.05, function()
-            sparkBudget = math.max(0, sparkBudget - 1)
-            if spark.Parent then
-                spark:Destroy()
-            end
-        end)
-    end
+    Debris:AddItem(part, 0.35)
 end
 
 local function makeTracer(p1, p2, color1, color2, thickness, lifetime)
@@ -25862,6 +25801,8 @@ local function makeTracer(p1, p2, color1, color2, thickness, lifetime)
         makeLaserBeam(p1, p2, color2)
         return
     end
+
+    spawnImpactEffect(p2, color2)
 
     if mode == 'Camera Facing Beam' then
         local p0 = Instance.new('Part')
@@ -26031,7 +25972,6 @@ GunTracers.createBullet = function(p1, p2)
             pcall(spawnThrowParticles, p1, p2)
             pcall(spawnAttackParticles, p2)
         end
-        pcall(spawnImpactEffect, p2, nil)
         if not (Toggles.Tracers.Value and Toggles.ShowBulletTracers.Value) then
             return false
         end
@@ -26054,7 +25994,6 @@ GunTracers.createSniper = function(p1, p2)
             pcall(spawnThrowParticles, p1, p2)
             pcall(spawnAttackParticles, p2)
         end
-        pcall(spawnImpactEffect, p2, nil)
         if not (Toggles.Tracers.Value and Toggles.ShowSniperTracers.Value) then
             return false
         end
@@ -26077,7 +26016,6 @@ GunTracers.createTaser = function(p1, p2)
             pcall(spawnThrowParticles, p1, p2)
             pcall(spawnAttackParticles, p2)
         end
-        pcall(spawnImpactEffect, p2, nil)
         if not (Toggles.Tracers.Value and Toggles.ShowTaserTracers.Value) then
             return false
         end
