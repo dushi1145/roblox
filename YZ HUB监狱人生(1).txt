@@ -22270,20 +22270,6 @@ Options.PubgKillMsgDuration = KillMsgGroup:AddSlider('PubgKillMsgDuration', {
     Text = '停留时长（秒）', Default = 3, Min = 1, Max = 8, Rounding = 1, Compact = false
 })
 
-KillMsgGroup:AddDivider()
-Toggles.CSKillCard = KillMsgGroup:AddToggle('CSKillCard', {
-    Text = 'CS 击杀卡片',
-    Default = true,
-    Tooltip = '击杀后弹出「血量 + 金星徽章 + 连杀倍率」卡片'
-})
-Options.CSKillCardScale = KillMsgGroup:AddSlider('CSKillCardScale', {
-    Text = '卡片大小', Default = 100, Min = 60, Max = 160, Rounding = 0, Suffix = ' %', Compact = false
-})
-do
-    local L = KillMsgGroup:AddLabel('卡片颜色')
-    L:AddColorPicker('CSKillCardColor', { Default = Color3.fromRGB(255, 128, 200), Title = '卡片颜色' })
-end
-
 -- ====================== MOVEMENT ======================
 
 -- Left Column: Player Movement & Flight
@@ -32262,6 +32248,14 @@ end)()
 -- UI Settings
 local MenuGroup = Tabs['UI Settings']:AddLeftGroupbox('菜单')
 MenuGroup:AddButton('卸载脚本', function() Library:Unload() end)
+MenuGroup:AddButton('UI 编辑（拖动 HUD 位置）', function()
+    if _G.YZOpenHudEditor then
+        pcall(_G.YZOpenHudEditor)
+    else
+        Library:Notify('UI 编辑模块未就绪', 3)
+    end
+end)
+
 MenuGroup:AddButton('重新加载背景图（备用）', function()
     local reload = _G.YZHUB_ReloadBackground
     if type(reload) ~= 'function' then
@@ -32379,6 +32373,14 @@ ThemeManager:ApplyToTab(Tabs['UI Settings'])
 end
 
 
+-- 可拖动 HUD 注册表（UI 编辑模式用）
+_G.YZMovableHud = _G.YZMovableHud or {}
+_G.YZAddMovable = function(entry)
+    if entry and entry.root then
+        _G.YZMovableHud[#_G.YZMovableHud + 1] = entry
+    end
+end
+
 -- Target HUD（仿截图：圆角卡片 + 头像 + 名字 + HP + 粉色血条）
 ; (function()
     local TweenService = game:GetService('TweenService')
@@ -32456,6 +32458,8 @@ end
     hudScale.Scale = 1
     hudScale.Parent = hudRoot
 
+    _G.YZAddMovable({ name = '目标信息', root = hudRoot })
+
     _G.BoarsResetTargetHUD = function()
         if hudRoot then
             hudRoot.Position = defaultPos
@@ -32502,19 +32506,19 @@ end
     edgeStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
     edgeStroke.Parent = edgeFrame
 
-    -- 只留 4 层、每层外扩 1.5px：够软又看不出叠层
+    -- 14 层、每层只外扩 1.1px、单层很淡：叠出来是连续柔和的投影，没有台阶感
     local shadowLayers = {}
-    for i = 1, 4 do
-        local pad = i * 1.5
+    for i = 1, 14 do
+        local pad = i * 1.1
         local layer = Instance.new('Frame')
         layer.BorderSizePixel = 0
         layer.BackgroundColor3 = Color3.new(0, 0, 0)
         layer.ZIndex = 1
         layer.Size = UDim2.new(1, pad * 2, 1, pad * 2)
-        layer.Position = UDim2.fromOffset(-pad, -pad + 2)
+        layer.Position = UDim2.fromOffset(-pad, -pad + 2.5)
         addCorner(layer, 16)
         layer.Parent = shadowHolder
-        shadowLayers[i] = { Frame = layer, Base = 0.80 + 0.05 * (i - 1) }
+        shadowLayers[i] = { Frame = layer, Base = 0.925 - 0.0045 * (i - 1) }
     end
 
     -- 卡片
@@ -32819,10 +32823,13 @@ end
         card.BackgroundColor3 = dark and Color3.fromRGB(22, 22, 26) or Color3.fromRGB(232, 232, 238)
         card.BackgroundTransparency = 1 - (0.94 * opacity)
         if dark then
-            cardStroke.Transparency = 0.82
-            edgeStroke.Color = Color3.fromRGB(96, 96, 110)
+            -- 深色卡片不要白边，只留阴影
+            cardStroke.Transparency = 1
+            cardBorder.BackgroundTransparency = 1
+            edgeStroke.Color = Color3.fromRGB(64, 64, 74)
         else
             cardStroke.Transparency = 1 - (0.9 * (1 - opacity * 0.6))
+            cardBorder.BackgroundTransparency = 0.35
             edgeStroke.Color = Color3.fromRGB(16, 16, 20)
         end
         barBack.BackgroundColor3 = dark and Color3.fromRGB(48, 44, 56) or Color3.fromRGB(58, 49, 64)
@@ -32832,9 +32839,9 @@ end
         shadowSpreadNow = math.clamp((tonumber(Options.TargetHUDShadow and Options.TargetHUDShadow.Value) or 80) / 100, 0, 1)
         local factor = 0.35 + 1.65 * shadowSpreadNow
         for i, layer in ipairs(shadowLayers) do
-            local pad = i * 1.5 * factor
+            local pad = i * 1.1 * factor
             layer.Frame.Size = UDim2.new(1, pad * 2, 1, pad * 2)
-            layer.Frame.Position = UDim2.fromOffset(-pad, -pad + 2)
+            layer.Frame.Position = UDim2.fromOffset(-pad, -pad + 2.5)
             layer.Frame.BackgroundTransparency = layer.Base
         end
 
@@ -33101,7 +33108,7 @@ end
 
             shadowHolder.Visible = alpha > 0.02
             edgeFrame.Visible = alpha > 0.02
-            edgeStroke.Transparency = themeDarkNow and (1 - (0.30 * alpha)) or (1 - (0.65 * alpha))
+            edgeStroke.Transparency = themeDarkNow and 1 or (1 - (0.65 * alpha))
             if shadowHolder.Visible then
                 for _, layer in ipairs(shadowLayers) do
                     layer.Frame.BackgroundTransparency = 1 - ((1 - layer.Base) * alpha)
@@ -33150,13 +33157,15 @@ do
 
     local feedContainer = Instance.new('Frame')
     feedContainer.Name = 'FeedContainer'
-    -- 锚点固定在右上角，配合 UIScale 缩放时右下角不会跑位
-    feedContainer.AnchorPoint = Vector2.new(1, 0)
-    feedContainer.Size = UDim2.new(0, 340, 0, 380)
-    feedContainer.Position = UDim2.new(1, -12, 0, 30)
+    -- 锚点固定在左上角，并且整体压到 Roblox 顶部导航栏下面，避免挤在一起
+    feedContainer.AnchorPoint = Vector2.new(0, 0)
+    feedContainer.Size = UDim2.new(0, 360, 0, 380)
+    feedContainer.Position = UDim2.new(0, 12, 0, 64)
     feedContainer.BackgroundTransparency = 1
     feedContainer.ClipsDescendants = false
     feedContainer.Parent = feedGui
+
+    _G.YZAddMovable({ name = '击杀播报', root = feedContainer })
 
     -- 整体缩放（默认比原版小一圈，可在"界面缩放"里调）
     local feedScale = Instance.new('UIScale')
@@ -33174,7 +33183,7 @@ do
     local listLayout = Instance.new('UIListLayout')
     listLayout.Name = 'Layout'
     listLayout.FillDirection = Enum.FillDirection.Vertical
-    listLayout.HorizontalAlignment = Enum.HorizontalAlignment.Right
+    listLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
     listLayout.VerticalAlignment = Enum.VerticalAlignment.Top
     listLayout.Padding = UDim.new(0, 5)
     listLayout.SortOrder = Enum.SortOrder.LayoutOrder
@@ -33514,7 +33523,7 @@ do
     end
 end
 
--- ====================== PUBG 击杀播报 + CS 击杀卡片 ======================
+-- ====================== PUBG 风格击杀播报 ======================
 ; (function()
     local TweenService = game:GetService('TweenService')
 
@@ -33554,10 +33563,6 @@ end
         return tostring(s):gsub('&', '&amp;'):gsub('<', '&lt;'):gsub('>', '&gt;')
     end
 
-    local function accentColor()
-        return (Options.CSKillCardColor and Options.CSKillCardColor.Value) or Color3.fromRGB(255, 128, 200)
-    end
-
     --// ===== PUBG 风格击杀播报（屏幕正下方一行） =====
     local msgGui = mkGui('YZPubgKill', 9700)
 
@@ -33568,6 +33573,8 @@ end
     msgRoot.BackgroundTransparency = 1
     msgRoot.Visible = false
     msgRoot.Parent = msgGui
+
+    _G.YZAddMovable({ name = '击杀消息', root = msgRoot })
 
     local msgScale = Instance.new('UIScale')
     msgScale.Scale = 1
@@ -33639,221 +33646,6 @@ end
         end)
     end
 
-    --// ===== CS 风格击杀卡片（血条数字 + 金星徽章 + 连杀倍率） =====
-    local cardGui = mkGui('YZKillCard', 9710)
-
-    local cardRoot = Instance.new('Frame')
-    cardRoot.AnchorPoint = Vector2.new(0.5, 1)
-    cardRoot.Position = UDim2.new(0.5, 0, 0.845, 0)
-    cardRoot.Size = UDim2.fromOffset(340, 64)
-    cardRoot.BackgroundTransparency = 1
-    cardRoot.Visible = false
-    cardRoot.Parent = cardGui
-
-    local cardScale = Instance.new('UIScale')
-    cardScale.Scale = 1
-    cardScale.Parent = cardRoot
-
-    local cardCanvas = nil
-    pcall(function()
-        cardCanvas = Instance.new('CanvasGroup')
-    end)
-    if not cardCanvas then
-        cardCanvas = Instance.new('Frame')
-    end
-    cardCanvas.Size = UDim2.fromScale(1, 1)
-    cardCanvas.BackgroundTransparency = 1
-    cardCanvas.Parent = cardRoot
-
-    local function mkText(parent, text, size, color, bold)
-        local l = Instance.new('TextLabel')
-        l.BackgroundTransparency = 1
-        l.BorderSizePixel = 0
-        l.Font = bold and Enum.Font.GothamBold or Enum.Font.Gotham
-        l.Text = text
-        l.TextSize = size
-        l.TextColor3 = color
-        l.TextStrokeColor3 = Color3.new(0, 0, 0)
-        l.TextStrokeTransparency = 0.55
-        l.TextXAlignment = Enum.TextXAlignment.Left
-        l.TextYAlignment = Enum.TextYAlignment.Center
-        l.Parent = parent
-        return l
-    end
-
-    -- 左：血量数字 + 小人图标
-    local hpIcon = Instance.new('Frame')
-    hpIcon.Position = UDim2.fromOffset(12, 22)
-    hpIcon.Size = UDim2.fromOffset(18, 18)
-    hpIcon.BackgroundTransparency = 1
-    hpIcon.Parent = cardCanvas
-
-    local head = Instance.new('Frame')
-    head.Position = UDim2.fromOffset(4, 1)
-    head.Size = UDim2.fromOffset(9, 9)
-    head.BackgroundColor3 = Color3.new(1, 1, 1)
-    head.BorderSizePixel = 0
-    head.Parent = hpIcon
-    corner(head, 99)
-
-    local shoulders = Instance.new('Frame')
-    shoulders.Position = UDim2.fromOffset(2, 11)
-    shoulders.Size = UDim2.fromOffset(14, 6)
-    shoulders.BackgroundColor3 = Color3.new(1, 1, 1)
-    shoulders.BorderSizePixel = 0
-    shoulders.Parent = hpIcon
-    corner(shoulders, 3)
-
-    local hpValue = mkText(cardCanvas, '100', 26, Color3.new(1, 1, 1), true)
-    hpValue.Position = UDim2.fromOffset(34, 12)
-    hpValue.Size = UDim2.fromOffset(70, 34)
-
-    local hpUnderline = Instance.new('Frame')
-    hpUnderline.Position = UDim2.fromOffset(34, 48)
-    hpUnderline.Size = UDim2.fromOffset(44, 2)
-    hpUnderline.BackgroundColor3 = Color3.new(1, 1, 1)
-    hpUnderline.BackgroundTransparency = 0.25
-    hpUnderline.BorderSizePixel = 0
-    hpUnderline.Parent = cardCanvas
-    corner(hpUnderline, 1)
-
-    -- 中：金星徽章 + 连杀数字
-    local badge = Instance.new('Frame')
-    badge.AnchorPoint = Vector2.new(0.5, 0)
-    badge.Position = UDim2.new(0.5, 0, 0, 16)
-    badge.Size = UDim2.fromOffset(42, 42)
-    badge.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
-    badge.BackgroundTransparency = 0.15
-    badge.BorderSizePixel = 0
-    badge.Parent = cardCanvas
-    corner(badge, 99)
-
-    local badgeStroke = Instance.new('UIStroke')
-    badgeStroke.Color = Color3.fromRGB(255, 196, 70)
-    badgeStroke.Thickness = 2
-    badgeStroke.Parent = badge
-
-    local star = Instance.new('ImageLabel')
-    star.Size = UDim2.fromOffset(22, 22)
-    star.AnchorPoint = Vector2.new(0.5, 0.5)
-    star.Position = UDim2.fromScale(0.5, 0.5)
-    star.BackgroundTransparency = 1
-    star.BorderSizePixel = 0
-    star.Image = 'rbxasset://textures/ui/PlayerList/StarIcon.png'
-    star.ImageColor3 = Color3.fromRGB(255, 196, 70)
-    star.Parent = badge
-
-    local streakPill = Instance.new('Frame')
-    streakPill.AnchorPoint = Vector2.new(0.5, 0)
-    streakPill.Position = UDim2.new(0.5, 0, 0, 2)
-    streakPill.Size = UDim2.fromOffset(24, 16)
-    streakPill.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
-    streakPill.BackgroundTransparency = 0.1
-    streakPill.BorderSizePixel = 0
-    streakPill.Parent = cardCanvas
-    corner(streakPill, 4)
-
-    local streakStroke = Instance.new('UIStroke')
-    streakStroke.Color = Color3.new(1, 1, 1)
-    streakStroke.Thickness = 1
-    streakStroke.Transparency = 0.5
-    streakStroke.Parent = streakPill
-
-    local streakText = Instance.new('TextLabel')
-    streakText.Size = UDim2.fromScale(1, 1)
-    streakText.BackgroundTransparency = 1
-    streakText.BorderSizePixel = 0
-    streakText.Font = Enum.Font.GothamBold
-    streakText.Text = '1'
-    streakText.TextSize = 11
-    streakText.TextColor3 = Color3.new(1, 1, 1)
-    streakText.Parent = streakPill
-
-    -- 右：总击杀 + 倍率
-    local killValue = mkText(cardCanvas, '0', 24, Color3.new(1, 1, 1), true)
-    killValue.Position = UDim2.fromOffset(250, 16)
-    killValue.Size = UDim2.fromOffset(50, 30)
-
-    local multValue = mkText(cardCanvas, 'x1', 15, Color3.new(1, 1, 1), true)
-    multValue.Position = UDim2.fromOffset(292, 22)
-    multValue.Size = UDim2.fromOffset(40, 22)
-    multValue.TextTransparency = 0.35
-
-    local totalKills = 0
-    local streak = 0
-    local lastKillAt = 0
-    local cardToken = 0
-
-    local function applyCardStyle()
-        local acc = accentColor()
-        hpValue.TextColor3 = acc
-        killValue.TextColor3 = acc
-        multValue.TextColor3 = acc
-        hpUnderline.BackgroundColor3 = acc
-        head.BackgroundColor3 = acc
-        shoulders.BackgroundColor3 = acc
-        streakStroke.Color = acc
-        cardScale.Scale = math.clamp((tonumber(Options.CSKillCardScale and Options.CSKillCardScale.Value) or 100) / 100, 0.5, 2)
-    end
-
-    local function showKillCard()
-        if Toggles.CSKillCard and Toggles.CSKillCard.Value == false then
-            return
-        end
-
-        totalKills += 1
-        local now = os.clock()
-        if now - lastKillAt <= 2.5 then
-            streak += 1
-        else
-            streak = 1
-        end
-        lastKillAt = now
-
-        local hum = LP.Character and LP.Character:FindFirstChildOfClass('Humanoid')
-        hpValue.Text = tostring(math.floor((hum and hum.Health) or 0))
-        killValue.Text = tostring(totalKills)
-        streakText.Text = tostring(streak)
-        multValue.Text = 'x' .. tostring(streak)
-        multValue.TextTransparency = streak > 1 and 0.1 or 0.6
-
-        applyCardStyle()
-
-        cardToken += 1
-        local token = cardToken
-        cardRoot.Visible = true
-        cardScale.Scale = 0.8 * (math.clamp((tonumber(Options.CSKillCardScale and Options.CSKillCardScale.Value) or 100) / 100, 0.5, 2))
-        if cardCanvas:IsA('CanvasGroup') then
-            cardCanvas.GroupTransparency = 1
-            TweenService:Create(cardCanvas, TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-                GroupTransparency = 0,
-            }):Play()
-        end
-
-        local baseScale = math.clamp((tonumber(Options.CSKillCardScale and Options.CSKillCardScale.Value) or 100) / 100, 0.5, 2)
-        TweenService:Create(cardScale, TweenInfo.new(0.22, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
-            Scale = baseScale,
-        }):Play()
-
-        task.delay(2.1, function()
-            if token ~= cardToken then
-                return
-            end
-            if cardCanvas:IsA('CanvasGroup') then
-                TweenService:Create(cardCanvas, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-                    GroupTransparency = 1,
-                }):Play()
-                task.delay(0.32, function()
-                    if token == cardToken then
-                        cardRoot.Visible = false
-                    end
-                end)
-            else
-                cardRoot.Visible = false
-            end
-        end)
-    end
-
     --// ===== 接到击杀事件上 =====
     local prevAddKillfeed = _G.BoarsAddKillfeed
     _G.BoarsAddKillfeed = function(killer, victim, weapon, isHead, dist, extra)
@@ -33867,9 +33659,6 @@ end
         end
 
         pcall(pushKillMsg, killer, victim, weapon)
-        if killer == nil or killer == LP then
-            pcall(showKillCard)
-        end
     end
 
     local prevTest = _G.BoarsTestKillfeed
@@ -33878,21 +33667,347 @@ end
             pcall(prevTest)
         end
         pcall(pushKillMsg, LP, nil, 'AK-47')
-        pcall(showKillCard)
     end
 
     -- 设置变更即时生效
-    for _, option in ipairs({ Options.PubgKillMsgScale, Options.CSKillCardScale, Options.CSKillCardColor }) do
-        if option and option.OnChanged then
-            option:OnChanged(function()
-                pcall(applyMsgScale)
-                pcall(applyCardStyle)
-            end)
-        end
+    if Options.PubgKillMsgScale and Options.PubgKillMsgScale.OnChanged then
+        Options.PubgKillMsgScale:OnChanged(function()
+            pcall(applyMsgScale)
+        end)
     end
 
     applyMsgScale()
-    applyCardStyle()
+end)()
+
+-- ====================== HUD 拖动编辑（虚线框 + 完成按钮） ======================
+; (function()
+    local entries = _G.YZMovableHud or {}
+
+    local editorGui = Instance.new('ScreenGui')
+    editorGui.Name = 'YZHudEditor'
+    editorGui.ResetOnSpawn = false
+    editorGui.IgnoreGuiInset = true
+    editorGui.DisplayOrder = 1000000
+    editorGui.Enabled = false
+    pcall(function()
+        if syn and syn.protect_gui then
+            syn.protect_gui(editorGui)
+            editorGui.Parent = game:GetService('CoreGui')
+        elseif gethui then
+            editorGui.Parent = gethui()
+        else
+            editorGui.Parent = game:GetService('CoreGui')
+        end
+    end)
+    if not editorGui.Parent then
+        pcall(function()
+            editorGui.Parent = LP:WaitForChild('PlayerGui')
+        end)
+    end
+
+    local DASH, GAP, TH = 7, 6, 1.5
+
+    local function makeDashed(holder, w, h)
+        for _, c in ipairs(holder:GetChildren()) do
+            if c:IsA('Frame') then
+                c:Destroy()
+            end
+        end
+
+        local function addDash(x, y, dw, dh)
+            local f = Instance.new('Frame')
+            f.Position = UDim2.fromOffset(x, y)
+            f.Size = UDim2.fromOffset(dw, dh)
+            f.BackgroundColor3 = Color3.new(1, 1, 1)
+            f.BackgroundTransparency = 0.05
+            f.BorderSizePixel = 0
+            f.ZIndex = 2
+            f.Parent = holder
+            local cc = Instance.new('UICorner')
+            cc.CornerRadius = UDim.new(0, 1)
+            cc.Parent = f
+        end
+
+        for _, y in ipairs({ 0, math.max(0, h - TH) }) do
+            local x = 0
+            while x < w do
+                local len = math.min(DASH, w - x)
+                addDash(x, y, len, TH)
+                x = x + DASH + GAP
+            end
+        end
+        for _, x in ipairs({ 0, math.max(0, w - TH) }) do
+            local y = TH
+            while y < h - TH do
+                local len = math.min(DASH, (h - TH) - y)
+                addDash(x, y, TH, len)
+                y = y + DASH + GAP
+            end
+        end
+    end
+
+    -- 每个 HUD 元素：虚线框 + 名称 + 拖动热区
+    local holders = {}
+    local beginDrag
+
+    local function buildHolder(entry)
+        local holder = Instance.new('Frame')
+        holder.Name = 'Holder_' .. tostring(entry.name)
+        holder.BackgroundTransparency = 1
+        holder.ZIndex = 1
+        holder.Parent = editorGui
+
+        local label = Instance.new('TextLabel')
+        label.Name = 'Tag'
+        label.BackgroundTransparency = 1
+        label.Size = UDim2.fromOffset(120, 14)
+        label.Position = UDim2.fromOffset(2, -16)
+        label.Font = Enum.Font.GothamBold
+        label.Text = tostring(entry.name)
+        label.TextSize = 11
+        label.TextColor3 = Color3.new(1, 1, 1)
+        label.TextStrokeColor3 = Color3.new(0, 0, 0)
+        label.TextStrokeTransparency = 0.2
+        label.TextXAlignment = Enum.TextXAlignment.Left
+        label.ZIndex = 3
+        label.Parent = holder
+
+        local handle = Instance.new('TextButton')
+        handle.Name = 'Handle'
+        handle.Size = UDim2.fromScale(1, 1)
+        handle.BackgroundTransparency = 1
+        handle.Text = ''
+        handle.ZIndex = 4
+        handle.Parent = holder
+
+        local data = { entry = entry, holder = holder, size = Vector2.new(-1, -1) }
+
+        handle.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1
+                or input.UserInputType == Enum.UserInputType.Touch then
+                beginDrag(data, input)
+            end
+        end)
+
+        holders[#holders + 1] = data
+        return data
+    end
+
+    local dragging = false
+    local dragData = nil
+    local dragStart = Vector2.zero
+    local dragBase = Vector2.zero
+
+    beginDrag = function(data, input)
+        if not data or not data.entry or not data.entry.root then
+            return
+        end
+        local root = data.entry.root
+        dragging = true
+        dragData = data
+        dragStart = Vector2.new(input.Position.X, input.Position.Y)
+        dragBase = Vector2.new(root.AbsolutePosition.X, root.AbsolutePosition.Y)
+        root.AnchorPoint = Vector2.new(0, 0)
+        root.Position = UDim2.fromOffset(dragBase.X, dragBase.Y)
+    end
+
+    UserInputService.InputChanged:Connect(function(input)
+        if not dragging or not dragData then
+            return
+        end
+        if input.UserInputType == Enum.UserInputType.MouseMovement
+            or input.UserInputType == Enum.UserInputType.Touch then
+            local delta = Vector2.new(input.Position.X, input.Position.Y) - dragStart
+            local target = dragBase + delta
+            local root = dragData.entry.root
+            if root then
+                root.Position = UDim2.fromOffset(target.X, target.Y)
+            end
+        end
+    end)
+
+    UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+            dragData = nil
+        end
+    end)
+
+    -- 底部「拖动调整位置 / 完成」条
+    local bar = Instance.new('Frame')
+    bar.AnchorPoint = Vector2.new(0.5, 1)
+    bar.Position = UDim2.new(0.5, 0, 1, -70)
+    bar.Size = UDim2.fromOffset(300, 42)
+    bar.BackgroundColor3 = Color3.fromRGB(24, 24, 30)
+    bar.BackgroundTransparency = 0.05
+    bar.BorderSizePixel = 0
+    bar.ZIndex = 10
+    bar.Parent = editorGui
+
+    local barCorner = Instance.new('UICorner')
+    barCorner.CornerRadius = UDim.new(0, 10)
+    barCorner.Parent = bar
+
+    local barStroke = Instance.new('UIStroke')
+    barStroke.Color = Color3.new(1, 1, 1)
+    barStroke.Thickness = 1
+    barStroke.Transparency = 0.8
+    barStroke.Parent = bar
+
+    local hint = Instance.new('TextLabel')
+    hint.Size = UDim2.new(1, -110, 1, 0)
+    hint.Position = UDim2.fromOffset(14, 0)
+    hint.BackgroundTransparency = 1
+    hint.Font = Enum.Font.GothamBold
+    hint.Text = '拖动调整位置'
+    hint.TextSize = 14
+    hint.TextColor3 = Color3.fromRGB(235, 238, 246)
+    hint.TextXAlignment = Enum.TextXAlignment.Left
+    hint.ZIndex = 11
+    hint.Parent = bar
+
+    local doneBtn = Instance.new('TextButton')
+    doneBtn.AnchorPoint = Vector2.new(1, 0.5)
+    doneBtn.Position = UDim2.new(1, -8, 0.5, 0)
+    doneBtn.Size = UDim2.fromOffset(72, 28)
+    doneBtn.BackgroundColor3 = Color3.fromRGB(232, 132, 62)
+    doneBtn.BackgroundTransparency = 0
+    doneBtn.BorderSizePixel = 0
+    doneBtn.Font = Enum.Font.GothamBold
+    doneBtn.Text = '完成'
+    doneBtn.TextSize = 14
+    doneBtn.TextColor3 = Color3.new(1, 1, 1)
+    doneBtn.ZIndex = 11
+    doneBtn.Parent = bar
+
+    local doneCorner = Instance.new('UICorner')
+    doneCorner.CornerRadius = UDim.new(0, 7)
+    doneCorner.Parent = doneBtn
+
+    -- 存档
+    local FILE = 'YZ_HUD_Layout.txt'
+
+    local function loadLayout()
+        local ok = pcall(function()
+            if not (isfile and isfile(FILE)) then
+                return
+            end
+            local raw = readfile(FILE)
+            for line in string.gmatch(raw or '', '[^\n]+') do
+                local name, x, y = string.match(line, '^(.-)\t(%-?%d+)\t(%-?%d+)$')
+                if name and x and y then
+                    for _, entry in ipairs(entries) do
+                        if entry.name == name and entry.root then
+                            entry.root.AnchorPoint = Vector2.new(0, 0)
+                            entry.root.Position = UDim2.fromOffset(tonumber(x), tonumber(y))
+                        end
+                    end
+                end
+            end
+        end)
+        return ok
+    end
+
+    local function saveLayout()
+        pcall(function()
+            if not writefile then
+                return
+            end
+            local out = {}
+            for _, entry in ipairs(entries) do
+                local root = entry.root
+                if root then
+                    out[#out + 1] = string.format('%s\t%d\t%d', tostring(entry.name), root.AbsolutePosition.X, root.AbsolutePosition.Y)
+                end
+            end
+            writefile(FILE, table.concat(out, '\n'))
+        end)
+    end
+
+    local editing = false
+
+    local function enterEditor()
+        if editing then
+            return
+        end
+        editing = true
+        editorGui.Enabled = true
+
+        for _, data in ipairs(holders) do
+            if data.holder then
+                data.holder:Destroy()
+            end
+        end
+        holders = {}
+
+        for _, entry in ipairs(entries) do
+            if entry.root then
+                entry.wasVisible = entry.root.Visible
+                entry.root.Visible = true
+                buildHolder(entry)
+            end
+        end
+
+        pcall(function()
+            if Library.Toggled then
+                Library:Toggle(false)
+            end
+        end)
+    end
+
+    local function exitEditor()
+        if not editing then
+            return
+        end
+        editing = false
+        editorGui.Enabled = false
+        for _, entry in ipairs(entries) do
+            if entry.root and entry.wasVisible ~= nil then
+                entry.root.Visible = entry.wasVisible
+                entry.wasVisible = nil
+            end
+        end
+        saveLayout()
+        pcall(function()
+            if not Library.Toggled then
+                Library:Toggle(true)
+            end
+        end)
+    end
+
+    doneBtn.MouseButton1Click:Connect(function()
+        exitEditor()
+    end)
+
+    _G.YZOpenHudEditor = function()
+        pcall(enterEditor)
+    end
+    _G.YZCloseHudEditor = function()
+        pcall(exitEditor)
+    end
+
+    -- 每帧把虚线框贴到元素上（尺寸变了就重画）
+    RunService.RenderStepped:Connect(function()
+        if not editing then
+            return
+        end
+        for _, data in ipairs(holders) do
+            local root = data.entry.root
+            if root and data.holder then
+                local pos = root.AbsolutePosition
+                local size = root.AbsoluteSize
+                data.holder.Position = UDim2.fromOffset(pos.X, pos.Y)
+                data.holder.Size = UDim2.fromOffset(size.X, size.Y)
+                if math.abs(size.X - data.size.X) > 1 or math.abs(size.Y - data.size.Y) > 1 then
+                    data.size = Vector2.new(size.X, size.Y)
+                    makeDashed(data.holder, size.X, size.Y)
+                end
+            end
+        end
+    end)
+
+    loadLayout()
 end)()
 
 -- ====================== CUSTOM VIEWMODEL & SPIN ======================
@@ -35343,19 +35458,19 @@ end
     shadowHolder.ZIndex = 1
     shadowHolder.Parent = islandRoot
 
-    -- 4 层、每层外扩 1.5px：小而柔和，没有一圈圈的层次感
+    -- 14 层、每层只外扩 1.1px、单层很淡：连续柔和的投影
     local shadowLayers = {}
-    for i = 1, 4 do
-        local pad = i * 1.5
+    for i = 1, 14 do
+        local pad = i * 1.1
         local layer = Instance.new('Frame')
         layer.BorderSizePixel = 0
         layer.BackgroundColor3 = Color3.new(0, 0, 0)
         layer.ZIndex = 1
         layer.Size = UDim2.new(1, pad * 2, 1, pad * 2)
-        layer.Position = UDim2.fromOffset(-pad, -pad + 2)
+        layer.Position = UDim2.fromOffset(-pad, -pad + 2.5)
         addCorner(layer, 20)
         layer.Parent = shadowHolder
-        shadowLayers[i] = { Frame = layer, Base = 0.80 + 0.05 * (i - 1) }
+        shadowLayers[i] = { Frame = layer, Base = 0.925 - 0.0045 * (i - 1) }
     end
 
     local pill = Instance.new('CanvasGroup')
@@ -35736,9 +35851,9 @@ end
         local spread = math.clamp((tonumber(Options.IslandShadow and Options.IslandShadow.Value) or 70) / 100, 0, 1)
         local factor = 0.35 + 1.65 * spread
         for i, layer in ipairs(shadowLayers) do
-            local pad = i * 1.5 * factor
+            local pad = i * 1.1 * factor
             layer.Frame.Size = UDim2.new(1, pad * 2, 1, pad * 2)
-            layer.Frame.Position = UDim2.fromOffset(-pad, -pad + 2)
+            layer.Frame.Position = UDim2.fromOffset(-pad, -pad + 2.5)
             layer.Frame.BackgroundTransparency = 1 - ((1 - layer.Base) * opacity)
         end
 
