@@ -32506,19 +32506,21 @@ end
     edgeStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
     edgeStroke.Parent = edgeFrame
 
-    -- 14 层、每层只外扩 1.1px、单层很淡：叠出来是连续柔和的投影，没有台阶感
+    -- 40 层、每层只挪 0.40px：等于一层连续的模糊；浓度从 2.4% 线性衰减到 0，圆角随距离变大
+    local SHADOW_LAYERS = 40
     local shadowLayers = {}
-    for i = 1, 14 do
-        local pad = i * 1.1
+    for i = 1, SHADOW_LAYERS do
+        local pad = i * 0.40
         local layer = Instance.new('Frame')
         layer.BorderSizePixel = 0
         layer.BackgroundColor3 = Color3.new(0, 0, 0)
         layer.ZIndex = 1
         layer.Size = UDim2.new(1, pad * 2, 1, pad * 2)
-        layer.Position = UDim2.fromOffset(-pad, -pad + 2.5)
-        addCorner(layer, 16)
+        layer.Position = UDim2.fromOffset(-pad, -pad + 2)
+        addCorner(layer, 16 + pad * 0.8)
         layer.Parent = shadowHolder
-        shadowLayers[i] = { Frame = layer, Base = 0.925 - 0.0045 * (i - 1) }
+        local alpha = 0.024 * (1 - (i - 1) / (SHADOW_LAYERS - 1))
+        shadowLayers[i] = { Frame = layer, Base = 1 - alpha }
     end
 
     -- 卡片
@@ -32837,11 +32839,15 @@ end
 
         -- 「阴影范围」= 往外扩多远（缩放参考脚本里每层 2px 的外扩量）
         shadowSpreadNow = math.clamp((tonumber(Options.TargetHUDShadow and Options.TargetHUDShadow.Value) or 80) / 100, 0, 1)
-        local factor = 0.35 + 1.65 * shadowSpreadNow
+        local factor = 0.55 + 0.90 * shadowSpreadNow
         for i, layer in ipairs(shadowLayers) do
-            local pad = i * 1.1 * factor
+            local pad = i * 0.40 * factor
             layer.Frame.Size = UDim2.new(1, pad * 2, 1, pad * 2)
-            layer.Frame.Position = UDim2.fromOffset(-pad, -pad + 2.5)
+            layer.Frame.Position = UDim2.fromOffset(-pad, -pad + 2)
+            local cc = layer.Frame:FindFirstChildOfClass('UICorner')
+            if cc then
+                cc.CornerRadius = UDim.new(0, 16 + pad * 0.8)
+            end
             layer.Frame.BackgroundTransparency = layer.Base
         end
 
@@ -35458,19 +35464,21 @@ end
     shadowHolder.ZIndex = 1
     shadowHolder.Parent = islandRoot
 
-    -- 14 层、每层只外扩 1.1px、单层很淡：连续柔和的投影
+    -- 40 层、每层 0.40px：连续的柔和投影，浓度线性衰减，圆角随距离放大
+    local SHADOW_LAYERS = 40
     local shadowLayers = {}
-    for i = 1, 14 do
-        local pad = i * 1.1
+    for i = 1, SHADOW_LAYERS do
+        local pad = i * 0.40
         local layer = Instance.new('Frame')
         layer.BorderSizePixel = 0
         layer.BackgroundColor3 = Color3.new(0, 0, 0)
         layer.ZIndex = 1
         layer.Size = UDim2.new(1, pad * 2, 1, pad * 2)
-        layer.Position = UDim2.fromOffset(-pad, -pad + 2.5)
-        addCorner(layer, 20)
+        layer.Position = UDim2.fromOffset(-pad, -pad + 2)
+        addCorner(layer, 20 + pad * 0.8)
         layer.Parent = shadowHolder
-        shadowLayers[i] = { Frame = layer, Base = 0.925 - 0.0045 * (i - 1) }
+        local alpha = 0.024 * (1 - (i - 1) / (SHADOW_LAYERS - 1))
+        shadowLayers[i] = { Frame = layer, Base = 1 - alpha }
     end
 
     local pill = Instance.new('CanvasGroup')
@@ -35849,11 +35857,15 @@ end
 
         -- 「阴影范围」= 往外扩多远（缩放参考脚本里每层 2px 的外扩量）
         local spread = math.clamp((tonumber(Options.IslandShadow and Options.IslandShadow.Value) or 70) / 100, 0, 1)
-        local factor = 0.35 + 1.65 * spread
+        local factor = 0.55 + 0.90 * spread
         for i, layer in ipairs(shadowLayers) do
-            local pad = i * 1.1 * factor
+            local pad = i * 0.40 * factor
             layer.Frame.Size = UDim2.new(1, pad * 2, 1, pad * 2)
-            layer.Frame.Position = UDim2.fromOffset(-pad, -pad + 2.5)
+            layer.Frame.Position = UDim2.fromOffset(-pad, -pad + 2)
+            local cc = layer.Frame:FindFirstChildOfClass('UICorner')
+            if cc then
+                cc.CornerRadius = UDim.new(0, 20 + pad * 0.8)
+            end
             layer.Frame.BackgroundTransparency = 1 - ((1 - layer.Base) * opacity)
         end
 
