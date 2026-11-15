@@ -26631,11 +26631,23 @@ local function hookDamageTracker(player)
                         if isKill then
                             if not hum:GetAttribute('KillfeedFired') then
                                 hum:SetAttribute('KillfeedFired', true)
-                                _G.BoarsAddKillfeed(LP, player, wName, isHeadShot, dist)
+                                _G.BoarsAddKillfeed(LP, player, wName, isHeadShot, dist, {
+                                    kind = 'kill',
+                                    damage = dmg,
+                                    part = (hitPart and hitPart.Name) or (isHeadShot and 'Head' or 'Body'),
+                                    hp = 0,
+                                    died = true,
+                                })
                             end
                         else
-                            -- 命中播报：非致命命中同样推一条，带本次伤害
-                            _G.BoarsAddKillfeed(LP, player, wName, isHeadShot, dist, { kind = 'hit', damage = dmg })
+                            -- 命中播报：非致命命中同样推一条，带本次伤害 / 部位 / 剩余血量
+                            _G.BoarsAddKillfeed(LP, player, wName, isHeadShot, dist, {
+                                kind = 'hit',
+                                damage = dmg,
+                                part = (hitPart and hitPart.Name) or (isHeadShot and 'Head' or 'Body'),
+                                hp = math.max(0, math.floor(newHealth)),
+                                died = (newHealth <= 0),
+                            })
                         end
                     end
 
@@ -32246,16 +32258,26 @@ end)()
 end)()
 
 -- UI Settings
-local MenuGroup = Tabs['UI Settings']:AddLeftGroupbox('菜单')
-MenuGroup:AddButton('卸载脚本', function() Library:Unload() end)
-MenuGroup:AddButton('UI 编辑（拖动 HUD 位置）', function()
+local HudEditGroup = Tabs['UI Settings']:AddLeftGroupbox('HUD 编辑')
+HudEditGroup:AddButton('编辑 HUD 位置', function()
     if _G.YZOpenHudEditor then
         pcall(_G.YZOpenHudEditor)
     else
         Library:Notify('UI 编辑模块未就绪', 3)
     end
 end)
+HudEditGroup:AddButton('重置 HUD 位置', function()
+    if _G.YZResetHudLayout then
+        pcall(_G.YZResetHudLayout)
+        Library:Notify('HUD 位置已重置', 3)
+    else
+        Library:Notify('UI 编辑模块未就绪', 3)
+    end
+end)
+HudEditGroup:AddLabel('点「编辑 HUD 位置」后，屏幕上会出现白色虚线框，拖动调整，点「完成」保存')
 
+local MenuGroup = Tabs['UI Settings']:AddLeftGroupbox('菜单')
+MenuGroup:AddButton('卸载脚本', function() Library:Unload() end)
 MenuGroup:AddButton('重新加载背景图（备用）', function()
     local reload = _G.YZHUB_ReloadBackground
     if type(reload) ~= 'function' then
@@ -32377,6 +32399,8 @@ end
 _G.YZMovableHud = _G.YZMovableHud or {}
 _G.YZAddMovable = function(entry)
     if entry and entry.root then
+        entry.defaultAnchor = entry.root.AnchorPoint
+        entry.defaultPos = entry.root.Position
         _G.YZMovableHud[#_G.YZMovableHud + 1] = entry
     end
 end
@@ -33262,7 +33286,15 @@ do
         end)
     end
 
-    -- extra.kind = 'hit' 时表示"命中播报"（extra.damage 为本次伤害）
+    -- extra.kind = 'hit' 时表示"命中播报"（extra.damage / extra.part / extra.hp / extra.died 为本次数据）
+    local function feedName(p)
+        return (p and (p.DisplayName or p.Name)) or '未知'
+    end
+
+    local function escRich(s)
+        return tostring(s):gsub('&', '&amp;'):gsub('<', '&lt;'):gsub('>', '&gt;')
+    end
+
     local function pushKillfeedEntry(killer, victim, weaponName, isHeadshot, distanceStuds, extra)
         if not (Toggles.Killfeed and Toggles.Killfeed.Value) then return end
 
@@ -33270,9 +33302,7 @@ do
         local hitDamage = (extra and tonumber(extra.damage)) or 0
 
         if isHit then
-            -- 命中播报开关
             if Toggles.KillfeedShowHits and Toggles.KillfeedShowHits.Value == false then return end
-            -- 命中播报只播报自己的命中
             if killer ~= LP then return end
         end
 
@@ -33288,21 +33318,32 @@ do
         local maxItems = (Options.KillfeedMaxItems and Options.KillfeedMaxItems.Value) or 5
         local duration = (Options.KillfeedDuration and Options.KillfeedDuration.Value) or 5
 
+        local partName = (extra and extra.part) or (isHeadshot and 'Head' or 'Body')
+        local hpLeft = (extra and tonumber(extra.hp))
+        local died = (extra and extra.died) or (not isHit)
+        if hpLeft == nil then
+            hpLeft = died and 0 or 45
+        end
+
         -- 连击合并：同一目标短时间内的连续命中累加到同一条
         if isHit and (Toggles.KillfeedMergeHits == nil or Toggles.KillfeedMergeHits.Value) then
             local prev = hitEntryByVictim[victim]
-            if prev and prev.frame and prev.frame.Parent
-                and prev.damageLabel and prev.damageLabel.Parent
-                and (tick() - (prev.lastTick or 0)) <= 1.5 then
+            if prev and prev.frame and prev.frame.Parent and (tick() - (prev.lastTick or 0)) <= 1.5 then
                 prev.damage = (prev.damage or 0) + (hitDamage > 0 and hitDamage or 0)
                 prev.lastTick = tick()
-                prev.damageLabel.Text = '-' .. math.floor(prev.damage + 0.5)
+                prev.hp = hpLeft
+                prev.died = died
+                if prev.part then
+                    prev.part = partName
+                end
+                if prev.render then
+                    pcall(prev.render)
+                end
                 scheduleExpire(prev, duration)
                 return
             end
         end
 
-        -- Remove oldest if limit reached
         while #activeEntries >= maxItems do
             local oldest = table.remove(activeEntries, 1)
             if oldest and oldest.frame and oldest.frame.Parent then
@@ -33315,168 +33356,72 @@ do
         local entry = Instance.new('Frame')
         entry.Name = 'Entry_' .. entryOrder
         entry.LayoutOrder = entryOrder
-        entry.AutomaticSize = Enum.AutomaticSize.X
-        entry.Size = UDim2.new(0, 0, 0, 24)
-        entry.BackgroundColor3 = THEME.surface
+        entry.AutomaticSize = Enum.AutomaticSize.XY
+        entry.Size = UDim2.new(0, 0, 0, 18)
         entry.BackgroundTransparency = 1
         entry.BorderSizePixel = 0
-
-        local corner = Instance.new('UICorner')
-        corner.CornerRadius = UDim.new(0, 2)
-        corner.Parent = entry
-
-        local padding = Instance.new('UIPadding')
-        padding.PaddingLeft = UDim.new(0, 0)
-        padding.PaddingRight = UDim.new(0, 10)
-        padding.Parent = entry
-
-        local hLayout = Instance.new('UIListLayout')
-        hLayout.FillDirection = Enum.FillDirection.Horizontal
-        hLayout.VerticalAlignment = Enum.VerticalAlignment.Center
-        hLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
-        hLayout.Padding = UDim.new(0, 6)
-        hLayout.SortOrder = Enum.SortOrder.LayoutOrder
-        hLayout.Parent = entry
-
-        local highlightMine = (Toggles.KillfeedHighlightMine == nil or Toggles.KillfeedHighlightMine.Value)
-        local showAccent = isMyKill and highlightMine
-        -- 命中条用更淡的强调条，和击杀区分开
-        local accentAlpha = showAccent and 0.05 or (isHit and 0.6 or 1)
-
-        -- 左侧 2px 强调条：只在"自己的击杀"出现，代替原来的彩色描边
-        local accentBar = Instance.new('Frame')
-        accentBar.Name = 'Accent'
-        accentBar.LayoutOrder = 0
-        accentBar.Size = UDim2.new(0, 2, 1, 0)
-        accentBar.BackgroundColor3 = (isHit and not showAccent) and THEME.accentDim or THEME.accent
-        accentBar.BackgroundTransparency = 1
-        accentBar.BorderSizePixel = 0
-        accentBar.Parent = entry
-
-        local labelOrder = 0
-
-        -- 1. 击杀者
-        labelOrder = labelOrder + 1
-        local killerLabel = Instance.new('TextLabel')
-        killerLabel.Name = 'Killer'
-        killerLabel.LayoutOrder = labelOrder
-        killerLabel.AutomaticSize = Enum.AutomaticSize.XY
-        killerLabel.BackgroundTransparency = 1
-        killerLabel.Font = Enum.Font.GothamMedium
-        killerLabel.TextSize = 13
-        killerLabel.Text = (killer and trimName(killer.DisplayName or killer.Name, 12)) or '未知'
-        killerLabel.TextColor3 = showAccent and THEME.accent or THEME.killer
-        killerLabel.TextTransparency = 1
-        killerLabel.Parent = entry
-
-        -- 2. 武器（无方括号，低对比度辅助信息）
-        local weaponText = formatWeaponName(weaponName)
-        if weaponText and (Toggles.KillfeedShowWeapon == nil or Toggles.KillfeedShowWeapon.Value) then
-            labelOrder = labelOrder + 1
-            local wepLabel = Instance.new('TextLabel')
-            wepLabel.Name = 'Weapon'
-            wepLabel.LayoutOrder = labelOrder
-            wepLabel.AutomaticSize = Enum.AutomaticSize.XY
-            wepLabel.BackgroundTransparency = 1
-            wepLabel.Font = Enum.Font.Gotham
-            wepLabel.TextSize = 11
-            wepLabel.Text = weaponText
-            wepLabel.TextColor3 = THEME.meta
-            wepLabel.TextTransparency = 1
-            wepLabel.Parent = entry
-        end
-
-        -- 3. 爆头标记（等宽小标，替代 emoji）
-        if isHeadshot and (Toggles.KillfeedShowHeadshot == nil or Toggles.KillfeedShowHeadshot.Value) then
-            labelOrder = labelOrder + 1
-            local hsLabel = Instance.new('TextLabel')
-            hsLabel.Name = 'Headshot'
-            hsLabel.LayoutOrder = labelOrder
-            hsLabel.AutomaticSize = Enum.AutomaticSize.XY
-            hsLabel.BackgroundTransparency = 1
-            hsLabel.Font = Enum.Font.Code
-            hsLabel.TextSize = 9
-            hsLabel.Text = 'HS'
-            hsLabel.TextColor3 = THEME.accent
-            hsLabel.TextTransparency = 1
-            hsLabel.Parent = entry
-        end
-
-        -- 4. 受击者
-        labelOrder = labelOrder + 1
-        local victimLabel = Instance.new('TextLabel')
-        victimLabel.Name = 'Victim'
-        victimLabel.LayoutOrder = labelOrder
-        victimLabel.AutomaticSize = Enum.AutomaticSize.XY
-        victimLabel.BackgroundTransparency = 1
-        victimLabel.Font = Enum.Font.GothamMedium
-        victimLabel.TextSize = 13
-        victimLabel.Text = (victim and trimName(victim.DisplayName or victim.Name, 12)) or '未知'
-        victimLabel.TextColor3 = isMyDeath and THEME.accent or THEME.victim
-        victimLabel.TextTransparency = 1
-        victimLabel.Parent = entry
-
-        -- 4.5 伤害（仅命中播报，等宽数字，带负号）
-        local damageLabel
-        if isHit and hitDamage > 0 then
-            labelOrder = labelOrder + 1
-            damageLabel = Instance.new('TextLabel')
-            damageLabel.Name = 'Damage'
-            damageLabel.LayoutOrder = labelOrder
-            damageLabel.AutomaticSize = Enum.AutomaticSize.XY
-            damageLabel.BackgroundTransparency = 1
-            damageLabel.Font = Enum.Font.Code
-            damageLabel.TextSize = 11
-            damageLabel.Text = '-' .. math.floor(hitDamage + 0.5)
-            damageLabel.TextColor3 = THEME.accent
-            damageLabel.TextTransparency = 1
-            damageLabel.Parent = entry
-        end
-
-        -- 5. 距离（等宽尾注）
-        if distanceStuds and distanceStuds > 0 and (Toggles.KillfeedShowDistance and Toggles.KillfeedShowDistance.Value) then
-            labelOrder = labelOrder + 1
-            local distLabel = Instance.new('TextLabel')
-            distLabel.Name = 'Distance'
-            distLabel.LayoutOrder = labelOrder
-            distLabel.AutomaticSize = Enum.AutomaticSize.XY
-            distLabel.BackgroundTransparency = 1
-            distLabel.Font = Enum.Font.Code
-            distLabel.TextSize = 10
-            distLabel.Text = math.round(distanceStuds * 0.28) .. 'm'
-            distLabel.TextColor3 = THEME.meta
-            distLabel.TextTransparency = 1
-            distLabel.Parent = entry
-        end
-
         entry.Parent = feedContainer
+
+        local line = Instance.new('TextLabel')
+        line.Name = 'Line'
+        line.AutomaticSize = Enum.AutomaticSize.XY
+        line.BackgroundTransparency = 1
+        line.BorderSizePixel = 0
+        line.Font = Enum.Font.GothamMedium
+        line.TextSize = 14
+        line.RichText = true
+        line.TextXAlignment = Enum.TextXAlignment.Left
+        line.TextYAlignment = Enum.TextYAlignment.Center
+        line.TextColor3 = Color3.fromRGB(228, 233, 240)
+        line.TextStrokeColor3 = Color3.new(0, 0, 0)
+        line.TextStrokeTransparency = 0.55
+        line.TextTransparency = 1
+        line.Parent = entry
 
         local entryData = {
             frame = entry,
             created = tick(),
             victim = victim,
             isHit = isHit,
-            damage = isHit and hitDamage or nil,
-            damageLabel = damageLabel,
+            damage = hitDamage,
             lastTick = tick(),
+            part = partName,
+            hp = hpLeft,
+            died = died,
+            weapon = weaponName,
+            label = line,
         }
-        table.insert(activeEntries, entryData)
 
+        entryData.render = function()
+            local nameHtml = string.format('<font color="#46D6E8">%s</font>', escRich(feedName(victim)))
+            local partHtml = string.format('<font color="#FF5A5A">%s</font>', escRich(entryData.part or 'Body'))
+            local weaponHtml = string.format('<font color="#E6E9EE">%s</font>', escRich(formatWeaponName(entryData.weapon) or 'Gun'))
+            local dmgHtml = string.format('<font color="#FF5A5A">%d</font>', math.floor((entryData.damage or 0) + 0.5))
+            local hpHtml = string.format('<font color="#7CE87C">%d</font>', math.max(0, math.floor(entryData.hp or 0)))
+
+            local text = string.format(
+                'hit %s in the %s with %s for %s damage (%s health remaining)',
+                nameHtml, partHtml, weaponHtml, dmgHtml, hpHtml
+            )
+
+            if entryData.died then
+                text = text .. ' <font color="#FF6B6B">The enemy has died</font>'
+            end
+
+            entryData.label.Text = text
+        end
+
+        entryData.render()
+
+        table.insert(activeEntries, entryData)
         if isHit and victim then
             hitEntryByVictim[victim] = entryData
         end
 
-        -- 入场：厚度淡入，强调条由 0 拉出，短促不拖沓
-        local fadeInInfo = TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-        TweenService:Create(entry, fadeInInfo, { BackgroundTransparency = isHit and 0.46 or 0.34 }):Play()
-        if accentAlpha < 1 then
-            TweenService:Create(accentBar, fadeInInfo, { BackgroundTransparency = accentAlpha }):Play()
-        end
-        for _, child in ipairs(entry:GetChildren()) do
-            if child:IsA('TextLabel') then
-                TweenService:Create(child, fadeInInfo, { TextTransparency = 0 }):Play()
-            end
-        end
+        -- 入场：文字淡入
+        TweenService:Create(line, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+            TextTransparency = 0,
+        }):Play()
 
         -- Auto Expire
         scheduleExpire(entryData, duration)
@@ -33928,6 +33873,20 @@ end)()
                 end
             end
             writefile(FILE, table.concat(out, '\n'))
+        end)
+    end
+
+    _G.YZResetHudLayout = function()
+        for _, entry in ipairs(entries) do
+            if entry.root and entry.defaultAnchor and entry.defaultPos then
+                entry.root.AnchorPoint = entry.defaultAnchor
+                entry.root.Position = entry.defaultPos
+            end
+        end
+        pcall(function()
+            if delfile then
+                delfile(FILE)
+            end
         end)
     end
 
@@ -36107,12 +36066,7 @@ end
     Toggles.Island = islandGroup:AddToggle('Island', {
         Text = '启用灵动岛',
         Default = true,
-        Tooltip = '屏幕顶部的胶囊提示，开关功能时显示模块名与状态',
-    })
-    Toggles.IslandShowToggle = islandGroup:AddToggle('IslandShowToggle', {
-        Text = '显示开关信息',
-        Default = true,
-        Tooltip = '打开 / 关闭任意开关时，在灵动岛上推送一条提示',
+        Tooltip = '屏幕顶部的常驻胶囊，显示 YZ HUB 与实时 FPS / 延迟',
     })
     Options.IslandPos = WXDrop(islandGroup, 'IslandPos', {
         Text = '位置',
@@ -36139,12 +36093,8 @@ end
         end,
     })
 
-    -- 这几个开关不推送灵动岛
-    listIgnore[Toggles.Island] = true
-    listIgnore[Toggles.IslandShowToggle] = true
-
     -- 设置变化立即生效
-    for _, toggle in ipairs({ Toggles.Island, Toggles.IslandShowToggle }) do
+    for _, toggle in ipairs({ Toggles.Island }) do
         if toggle then
             toggle:OnChanged(function()
                 pcall(applyIslandSettings)
@@ -36160,52 +36110,6 @@ end
     end
 
     applyIslandSettings()
-
-    --==================== 开关信息 → 灵动岛 ====================
-    local ignoreIsland = {
-        [Toggles.Island] = true,
-        [Toggles.IslandShowToggle] = true,
-    }
-
-    local pushBudget, pushWindow = 0, 0
-
-    local function onAnyToggleChanged(toggle, value)
-        if Toggles.Island and Toggles.Island.Value == false then
-            return
-        end
-        if Toggles.IslandShowToggle and Toggles.IslandShowToggle.Value == false then
-            return
-        end
-        if ignoreIsland[toggle] then
-            return
-        end
-
-        local now = os.clock()
-        if now - pushWindow > 1 then
-            pushWindow = now
-            pushBudget = 0
-        end
-        if pushBudget >= 6 then
-            return
-        end
-        pushBudget += 1
-
-        islandPush(toggle.Text or '模块', value and '已开启' or '已关闭', value == true)
-    end
-
-    for _, toggle in pairs(Toggles) do
-        if type(toggle) == 'table' and type(toggle.SetValue) == 'function'
-            and toggle.Value ~= nil and not toggle.__yzHudHooked then
-            toggle.__yzHudHooked = true
-            local previous = toggle.Changed
-            toggle.Changed = function(value)
-                if previous then
-                    pcall(previous, value)
-                end
-                pcall(onAnyToggleChanged, toggle, value)
-            end
-        end
-    end
 
     pcall(function()
         ThemeManager:ApplyToTab(uiTab)
