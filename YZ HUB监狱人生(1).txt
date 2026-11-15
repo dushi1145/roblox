@@ -30185,42 +30185,63 @@ local function removeESP(player)
 end
 
 -- 头顶名牌（仿截图：深色圆角胶囊 + 状态点 + 距离小牌）
--- 用 BillboardGui 而不是 Drawing.Text，才能画出圆角背景和距离小牌
-function WXBuildNameTag(player, char)
-    local head = char and char:FindFirstChild('Head')
-    if not head then return nil end
+-- 用屏幕空间绘制（ScreenGui + WorldToViewportPoint）：
+--   · 圆角背景、距离小牌都能画清楚；
+--   · 不受「拉伸分辨率」影响（BillboardGui 会被相机的纵向缩放压扁 / 跑位）。
+local nameTagGui = Instance.new('ScreenGui')
+nameTagGui.Name = 'YZNameTags'
+nameTagGui.ResetOnSpawn = false
+nameTagGui.IgnoreGuiInset = true
+nameTagGui.DisplayOrder = 9400
+nameTagGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+pcall(function()
+    if syn and syn.protect_gui then
+        syn.protect_gui(nameTagGui)
+        nameTagGui.Parent = game:GetService('CoreGui')
+    elseif gethui then
+        nameTagGui.Parent = gethui()
+    else
+        nameTagGui.Parent = game:GetService('CoreGui')
+    end
+end)
+if not nameTagGui.Parent then
+    pcall(function()
+        nameTagGui.Parent = LP:WaitForChild('PlayerGui')
+    end)
+end
 
-    local billboard = Instance.new('BillboardGui')
-    billboard.Name = 'YZNameTag'
-    billboard.Adornee = head
-    billboard.AlwaysOnTop = true
-    billboard.LightInfluence = 0
-    billboard.ResetOnSpawn = false
-    billboard.MaxDistance = 500
-    billboard.Size = UDim2.fromOffset(260, 26)
-    billboard.StudsOffsetWorldSpace = Vector3.new(0, 1.5, 0)
-    billboard.Parent = head
+local nameTagHolder = Instance.new('Frame')
+nameTagHolder.Name = 'Holder'
+nameTagHolder.Size = UDim2.fromScale(1, 1)
+nameTagHolder.BackgroundTransparency = 1
+nameTagHolder.Parent = nameTagGui
 
+local function tagCorner(obj, r)
+    local c = Instance.new('UICorner')
+    c.CornerRadius = UDim.new(0, r)
+    c.Parent = obj
+    return c
+end
+
+function WXBuildNameTag(player)
     local pill = Instance.new('Frame')
     pill.Name = 'Pill'
-    pill.AnchorPoint = Vector2.new(0.5, 0.5)
-    pill.Position = UDim2.fromScale(0.5, 0.5)
+    pill.AnchorPoint = Vector2.new(0.5, 1)
+    pill.Position = UDim2.fromOffset(-10000, -10000)
     pill.Size = UDim2.fromOffset(0, 24)
     pill.AutomaticSize = Enum.AutomaticSize.X
     pill.BackgroundColor3 = Color3.fromRGB(24, 24, 28)
-    pill.BackgroundTransparency = 0.12
+    pill.BackgroundTransparency = 0.1
     pill.BorderSizePixel = 0
-    pill.Parent = billboard
+    pill.Visible = false
+    pill.Parent = nameTagHolder
 
-    local corner = Instance.new('UICorner')
-    corner.CornerRadius = UDim.new(0, 7)
-    corner.Parent = pill
+    tagCorner(pill, 7)
 
     local stroke = Instance.new('UIStroke')
     stroke.Color = Color3.new(1, 1, 1)
     stroke.Thickness = 1
     stroke.Transparency = 0.72
-    stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
     stroke.Parent = pill
 
     local padding = Instance.new('UIPadding')
@@ -30243,9 +30264,11 @@ function WXBuildNameTag(player, char)
     dot.BorderSizePixel = 0
     dot.LayoutOrder = 1
     dot.Parent = pill
-    local dotCorner = Instance.new('UICorner')
-    dotCorner.CornerRadius = UDim.new(1, 0)
-    dotCorner.Parent = dot
+    do
+        local c = Instance.new('UICorner')
+        c.CornerRadius = UDim.new(1, 0)
+        c.Parent = dot
+    end
 
     local nameLabel = Instance.new('TextLabel')
     nameLabel.Name = 'Name'
@@ -30260,7 +30283,7 @@ function WXBuildNameTag(player, char)
     nameLabel.TextStrokeTransparency = 0.55
     nameLabel.TextXAlignment = Enum.TextXAlignment.Left
     nameLabel.TextYAlignment = Enum.TextYAlignment.Center
-    nameLabel.Text = player.Name
+    nameLabel.Text = tostring(player.Name)
     nameLabel.LayoutOrder = 2
     nameLabel.Parent = pill
 
@@ -30273,10 +30296,7 @@ function WXBuildNameTag(player, char)
     badge.BorderSizePixel = 0
     badge.LayoutOrder = 3
     badge.Parent = pill
-
-    local badgeCorner = Instance.new('UICorner')
-    badgeCorner.CornerRadius = UDim.new(0, 4)
-    badgeCorner.Parent = badge
+    tagCorner(badge, 4)
 
     local badgeStroke = Instance.new('UIStroke')
     badgeStroke.Color = Color3.new(1, 1, 1)
@@ -30303,22 +30323,37 @@ function WXBuildNameTag(player, char)
     distLabel.Text = '--'
     distLabel.Parent = badge
 
-    return billboard
+    local scale = Instance.new('UIScale')
+    scale.Scale = 1
+    scale.Parent = pill
+
+    return pill
 end
 
-function WXUpdateNameTag(billboard, player, char, color)
+function WXUpdateNameTag(pill, player, char, color)
+    local cam = workspace.CurrentCamera
     local head = char and char:FindFirstChild('Head')
-    if not head then
-        billboard.Enabled = false
+    if not cam or not head then
+        pill.Visible = false
         return
     end
-    if billboard.Adornee ~= head then
-        billboard.Adornee = head
-    end
-    billboard.Enabled = true
 
-    local pill = billboard:FindFirstChild('Pill')
-    if not pill then return end
+    local origin = head.Position + Vector3.new(0, 1.55, 0)
+    local screenPos, onScreen = cam:WorldToViewportPoint(origin)
+    local dist = (cam.CFrame.Position - head.Position).Magnitude
+
+    if not onScreen or dist > 600 then
+        pill.Visible = false
+        return
+    end
+
+    local scaleObj = pill:FindFirstChildOfClass('UIScale')
+    if scaleObj then
+        scaleObj.Scale = math.clamp(80 / math.max(dist, 1), 0.55, 1.2)
+    end
+
+    pill.Position = UDim2.fromOffset(screenPos.X, screenPos.Y)
+    pill.Visible = true
 
     local dot = pill:FindFirstChild('Dot')
     local nameLabel = pill:FindFirstChild('Name')
@@ -30335,13 +30370,7 @@ function WXUpdateNameTag(billboard, player, char, color)
     end
 
     if distLabel then
-        local myRoot = LP.Character and LP.Character:FindFirstChild('HumanoidRootPart')
-        local targetRoot = char:FindFirstChild('HumanoidRootPart')
-        if myRoot and targetRoot then
-            distLabel.Text = string.format('%dm', math.floor((myRoot.Position - targetRoot.Position).Magnitude))
-        else
-            distLabel.Text = '--'
-        end
+        distLabel.Text = string.format('%dm', math.floor(dist))
     end
 end
 
@@ -30443,7 +30472,7 @@ local function createESP(player)
                 -- Name ESP（仿截图：头顶深色圆角名牌 + 状态点 + 距离）
                 if Toggles.ESPName.Value then
                     if not nameTag or not nameTag.Parent then
-                        nameTag = WXBuildNameTag(player, char)
+                        nameTag = WXBuildNameTag(player)
                     end
                     if nameTag then
                         WXUpdateNameTag(nameTag, player, char, ec)
@@ -32232,26 +32261,258 @@ pcall(function()
         Library.KeybindFrame.Visible = false
     end
 end)
-Library:SetWatermarkVisibility(true)
+-- ====================== 左上角水印（仿 Pharos：深色圆角胶囊 + 阴影） ======================
+local WatermarkGroup = Tabs['UI Settings']:AddLeftGroupbox('水印', 'activity')
+Toggles.Watermark = WatermarkGroup:AddToggle('Watermark', { Text = '启用水印', Default = true })
+Options.WatermarkOpacity = WatermarkGroup:AddSlider('WatermarkOpacity', {
+    Text = '透明度', Default = 100, Min = 20, Max = 100, Rounding = 0, Suffix = ' %', Compact = false
+})
+Options.WatermarkScale = WatermarkGroup:AddSlider('WatermarkScale', {
+    Text = '大小', Default = 100, Min = 60, Max = 160, Rounding = 0, Suffix = ' %', Compact = false
+})
 
-local FrameTimer = tick()
-local FrameCounter = 0
-local FPS = 60
-
-RunService.RenderStepped:Connect(function()
-    FrameCounter += 1
-    if (tick() - FrameTimer) >= 1 then
-        FPS = FrameCounter
-        FrameTimer = tick()
-        FrameCounter = 0
-    end
+; (function()
+    local gui = Instance.new('ScreenGui')
+    gui.Name = 'YZWatermark'
+    gui.ResetOnSpawn = false
+    gui.IgnoreGuiInset = true
+    gui.DisplayOrder = 9800
+    gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
     pcall(function()
-        Library:SetWatermark(('BY：y｜YZ | %s 帧 | %s 毫秒'):format(
-            math.floor(FPS),
-            math.floor(game:GetService('Stats').Network.ServerStatsItem['Data Ping']:GetValue())
-        ))
+        if syn and syn.protect_gui then
+            syn.protect_gui(gui)
+            gui.Parent = game:GetService('CoreGui')
+        elseif gethui then
+            gui.Parent = gethui()
+        else
+            gui.Parent = game:GetService('CoreGui')
+        end
     end)
-end)
+    if not gui.Parent then
+        pcall(function()
+            gui.Parent = LP:WaitForChild('PlayerGui')
+        end)
+    end
+
+    local function corner(obj, r)
+        local c = Instance.new('UICorner')
+        c.CornerRadius = UDim.new(0, r)
+        c.Parent = obj
+        return c
+    end
+
+    -- 胶囊（CanvasGroup 便于整体调透明度）
+    local pill = nil
+    pcall(function()
+        pill = Instance.new('CanvasGroup')
+    end)
+    if not pill then
+        pill = Instance.new('Frame')
+    end
+
+    local BASE_X, BASE_Y = 14, 14
+    pill.Name = 'WatermarkPill'
+    pill.AnchorPoint = Vector2.new(0, 0)
+    pill.Position = UDim2.fromOffset(BASE_X, BASE_Y)
+    pill.Size = UDim2.fromOffset(0, 40)
+    pill.AutomaticSize = Enum.AutomaticSize.X
+    pill.BackgroundColor3 = Color3.fromRGB(38, 38, 43)
+    pill.BackgroundTransparency = 0.1
+    pill.BorderSizePixel = 0
+    pill.Active = true
+    pill.ZIndex = 2
+    pill.Parent = gui
+    corner(pill, 18)
+
+    local pillStroke = Instance.new('UIStroke')
+    pillStroke.Color = Color3.new(1, 1, 1)
+    pillStroke.Thickness = 1
+    pillStroke.Transparency = 0.85
+    pillStroke.Parent = pill
+
+    local padding = Instance.new('UIPadding')
+    padding.PaddingLeft = UDim.new(0, 11)
+    padding.PaddingRight = UDim.new(0, 14)
+    padding.Parent = pill
+
+    local layout = Instance.new('UIListLayout')
+    layout.FillDirection = Enum.FillDirection.Horizontal
+    layout.VerticalAlignment = Enum.VerticalAlignment.Center
+    layout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+    layout.Padding = UDim.new(0, 10)
+    layout.SortOrder = Enum.SortOrder.LayoutOrder
+    layout.Parent = pill
+
+    -- 标记
+    local mark = Instance.new('Frame')
+    mark.Size = UDim2.fromOffset(22, 22)
+    mark.BackgroundColor3 = Color3.fromRGB(118, 88, 255)
+    mark.BorderSizePixel = 0
+    mark.LayoutOrder = 1
+    mark.Parent = pill
+    corner(mark, 7)
+
+    local markText = Instance.new('TextLabel')
+    markText.Size = UDim2.fromScale(1, 1)
+    markText.BackgroundTransparency = 1
+    markText.BorderSizePixel = 0
+    markText.Font = Enum.Font.GothamBlack
+    markText.Text = 'Y'
+    markText.TextSize = 12
+    markText.TextColor3 = Color3.new(1, 1, 1)
+    markText.Parent = mark
+
+    local function mkText(text, size, color, bold)
+        local l = Instance.new('TextLabel')
+        l.Size = UDim2.fromOffset(0, 24)
+        l.AutomaticSize = Enum.AutomaticSize.X
+        l.BackgroundTransparency = 1
+        l.BorderSizePixel = 0
+        l.Font = bold and Enum.Font.GothamBold or Enum.Font.Gotham
+        l.Text = text
+        l.TextSize = size
+        l.TextColor3 = color
+        l.TextXAlignment = Enum.TextXAlignment.Left
+        l.TextYAlignment = Enum.TextYAlignment.Center
+        l.Parent = pill
+        return l
+    end
+
+    local title = mkText('YZ HUB', 17, Color3.new(1, 1, 1), true)
+    title.LayoutOrder = 2
+    local fpsLabel = mkText('0 fps', 14, Color3.fromRGB(232, 233, 240), false)
+    fpsLabel.LayoutOrder = 3
+    local pingLabel = mkText('0 ms', 14, Color3.fromRGB(232, 233, 240), false)
+    pingLabel.LayoutOrder = 4
+
+    -- 阴影：和灵动岛同一套（多层黑框叠柔和投影）
+    local shadowLayers = {}
+    for i = 1, 5 do
+        local layer = Instance.new('Frame')
+        layer.BorderSizePixel = 0
+        layer.BackgroundColor3 = Color3.new(0, 0, 0)
+        layer.ZIndex = 1
+        layer.Visible = false
+        layer.Parent = gui
+        corner(layer, 18 + i * 3)
+        shadowLayers[i] = { Frame = layer, Grow = i * 2, Base = 0.05 + i * 0.03 }
+    end
+
+    local currentX, currentY = BASE_X, BASE_Y
+
+    local function applyOpacity()
+        local opacity = (tonumber(Options.WatermarkOpacity and Options.WatermarkOpacity.Value) or 100) / 100
+        opacity = math.clamp(opacity, 0.2, 1)
+        if pill:IsA('CanvasGroup') then
+            pill.GroupTransparency = 1 - opacity
+        else
+            pill.BackgroundTransparency = 1 - 0.9 * opacity
+        end
+        pillStroke.Transparency = 1 - 0.15 * opacity
+        for _, layer in ipairs(shadowLayers) do
+            layer.Frame.BackgroundTransparency = 1 - (layer.Base * opacity)
+        end
+    end
+
+    local function syncShadow()
+        local w = pill.AbsoluteSize.X
+        local h = pill.AbsoluteSize.Y
+        for _, layer in ipairs(shadowLayers) do
+            local grow = layer.Grow
+            layer.Frame.Size = UDim2.fromOffset(w + grow * 2, h + grow * 2)
+            layer.Frame.Position = UDim2.fromOffset(currentX - grow, currentY - grow + 2)
+            layer.Frame.Visible = true
+        end
+    end
+
+    local function applyScale()
+        local scale = (tonumber(Options.WatermarkScale and Options.WatermarkScale.Value) or 100) / 100
+        local uiScale = pill:FindFirstChildOfClass('UIScale')
+        if not uiScale then
+            uiScale = Instance.new('UIScale')
+            uiScale.Parent = pill
+        end
+        uiScale.Scale = math.clamp(scale, 0.5, 2)
+        task.defer(syncShadow)
+    end
+
+    local function applyEnabled()
+        local on = Toggles.Watermark == nil or Toggles.Watermark.Value ~= false
+        gui.Enabled = on
+    end
+
+    pill:GetPropertyChangedSignal('AbsoluteSize'):Connect(function()
+        syncShadow()
+    end)
+
+    -- 拖动
+    local dragging = false
+    local dragStart = nil
+    local dragOrigin = nil
+    pill.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            dragOrigin = Vector2.new(currentX, currentY)
+        end
+    end)
+    UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if not dragging or not dragStart then
+            return
+        end
+        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+            local delta = input.Position - dragStart
+            currentX = dragOrigin.X + delta.X
+            currentY = dragOrigin.Y + delta.Y
+            pill.Position = UDim2.fromOffset(currentX, currentY)
+            syncShadow()
+        end
+    end)
+
+    if Toggles.Watermark then
+        Toggles.Watermark:OnChanged(function()
+            applyEnabled()
+        end)
+    end
+    for _, option in ipairs({ Options.WatermarkOpacity, Options.WatermarkScale }) do
+        if option and option.OnChanged then
+            option:OnChanged(function()
+                applyOpacity()
+                applyScale()
+            end)
+        end
+    end
+
+    applyEnabled()
+    applyOpacity()
+    applyScale()
+    task.defer(syncShadow)
+
+    -- FPS / 延迟
+    local frameTimer = tick()
+    local frameCounter = 0
+    RunService.RenderStepped:Connect(function()
+        frameCounter += 1
+        if (tick() - frameTimer) >= 1 then
+            local fps = frameCounter
+            frameCounter = 0
+            frameTimer = tick()
+            pcall(function()
+                fpsLabel.Text = string.format('%d fps', fps)
+                local ping = 0
+                pcall(function()
+                    ping = game:GetService('Stats').Network.ServerStatsItem['Data Ping']:GetValue()
+                end)
+                pingLabel.Text = string.format('%d ms', math.floor(ping))
+            end)
+        end
+    end)
+end)()
 
 ThemeManager:SetLibrary(Library)
 SaveManager:SetLibrary(Library)
@@ -32418,11 +32679,10 @@ end
         layer.BorderSizePixel = 0
         layer.BackgroundColor3 = Color3.new(0, 0, 0)
         layer.ZIndex = 1
-        layer.Size = UDim2.new(1, i * 5, 1, i * 5)
-        layer.Position = UDim2.fromOffset(-i * 2.5, -i * 2.5 + 3)
-        addCorner(layer, 16 + i * 2)
-        layer.Parent = shadowHolder
-        shadowLayers[i] = { Frame = layer, Base = 0.05 + i * 0.03 }
+        layer.Size = UDim2.new(1, i * 4, 1, i * 4)
+        layer.Position = UDim2.fromOffset(-i * 2, -i * 2 + 2)
+        addCorner(layer, 16 + i * 3)
+        shadowLayers[i] = { Frame = layer, Base = 0.04 + i * 0.022 }
     end
 
     -- 卡片
@@ -32441,15 +32701,15 @@ end
     -- 头像
     local avatarFrame = Instance.new('Frame')
     avatarFrame.Name = 'AvatarFrame'
+    avatarFrame.AnchorPoint = Vector2.new(0.5, 0.5) -- 以中心为锚点：受伤缩放时向中间收，不会往左上角跑
     avatarFrame.Size = UDim2.fromOffset(AVATAR_SIZE, AVATAR_SIZE)
-    avatarFrame.Position = UDim2.fromOffset(12, 13)
+    avatarFrame.Position = UDim2.fromOffset(40, 41) -- 12 + 56/2, 13 + 56/2
     avatarFrame.BackgroundColor3 = Color3.fromRGB(52, 52, 60)
     avatarFrame.BorderSizePixel = 0
-    avatarFrame.ClipsDescendants = true
+    avatarFrame.ClipsDescendants = false
     avatarFrame.ZIndex = 3
     avatarFrame.Parent = card
     addCorner(avatarFrame, 13)
-    addStroke(avatarFrame, Color3.new(1, 1, 1), 2, 0.35)
 
     local avatarScale = Instance.new('UIScale')
     avatarScale.Scale = 1
@@ -32464,6 +32724,8 @@ end
     avatarImg.Image = 'rbxasset://textures/ui/GuiImagePlaceholder.png'
     avatarImg.ZIndex = 4
     avatarImg.Parent = avatarFrame
+    addCorner(avatarImg, 13)
+    addStroke(avatarImg, Color3.new(1, 1, 1), 2, 0.35)
 
     -- 名字 / 血量 / 血条 / 附加信息
     local infoX = 80
@@ -34786,12 +35048,22 @@ end
     --==================== 灵动岛 ====================
     local islandGui = mkGui('YZIsland', 9990)
 
-    local islandRoot = Instance.new('Frame')
+    local islandRoot = nil
+    pcall(function()
+        islandRoot = Instance.new('CanvasGroup')
+    end)
+    if not islandRoot then
+        islandRoot = Instance.new('Frame')
+    end
     islandRoot.Name = 'IslandRoot'
     islandRoot.AnchorPoint = Vector2.new(0.5, 0)
     islandRoot.Position = UDim2.new(0.5, 0, 0, 14)
     islandRoot.Size = UDim2.fromOffset(176, 40)
     islandRoot.BackgroundTransparency = 1
+    islandRoot.Visible = false
+    if islandRoot:IsA('CanvasGroup') then
+        islandRoot.GroupTransparency = 1
+    end
     islandRoot.Parent = islandGui
 
     local islandScale = Instance.new('UIScale')
@@ -34915,17 +35187,37 @@ end
         local badge = Instance.new('Frame')
         badge.Size = UDim2.fromOffset(16, 16)
         badge.Position = UDim2.fromOffset(0, 3)
-        badge.BackgroundColor3 = item.on and Color3.fromRGB(48, 176, 88) or Color3.fromRGB(214, 68, 78)
         badge.BorderSizePixel = 0
         addCorner(badge, 5)
         badge.Parent = row
-        mkLabel(badge, {
-            Text = item.on and '✓' or '✕',
-            Size = UDim2.fromScale(1, 1),
-            TextSize = 10,
-            TextXAlignment = Enum.TextXAlignment.Center,
-            TextColor3 = Color3.new(1, 1, 1),
-        })
+
+        -- 勾 / 叉都用旋转的小横条画：不依赖字体里的 ✓ ✕（Gotham 里没有会显示成方块）
+        local function miniBar(parent, x, y, w, h, angle)
+            local bar = Instance.new('Frame')
+            bar.AnchorPoint = Vector2.new(0.5, 0.5)
+            bar.Position = UDim2.fromOffset(x, y)
+            bar.Size = UDim2.fromOffset(w, h)
+            bar.Rotation = angle
+            bar.BackgroundColor3 = Color3.new(1, 1, 1)
+            bar.BorderSizePixel = 0
+            bar.Parent = parent
+            addCorner(bar, h / 2)
+            return bar
+        end
+
+        local tickGroup = Instance.new('Frame')
+        tickGroup.Size = UDim2.fromScale(1, 1)
+        tickGroup.BackgroundTransparency = 1
+        tickGroup.Parent = badge
+        miniBar(tickGroup, 6.3, 8.7, 5.4, 1.9, 45)
+        miniBar(tickGroup, 9.9, 7.3, 8.0, 1.9, -45)
+
+        local crossGroup = Instance.new('Frame')
+        crossGroup.Size = UDim2.fromScale(1, 1)
+        crossGroup.BackgroundTransparency = 1
+        crossGroup.Parent = badge
+        miniBar(crossGroup, 8, 8, 8.0, 1.9, 45)
+        miniBar(crossGroup, 8, 8, 8.0, 1.9, -45)
 
         mkLabel(row, {
             Text = tostring(item.title or ''),
@@ -34940,18 +35232,41 @@ end
         track.Size = UDim2.fromOffset(26, 14)
         track.AnchorPoint = Vector2.new(1, 0.5)
         track.Position = UDim2.new(1, 0, 0.5, 0)
-        track.BackgroundColor3 = item.on and Color3.fromRGB(128, 92, 255) or Color3.fromRGB(52, 56, 66)
+        track.BackgroundColor3 = Color3.fromRGB(52, 56, 66)
         track.BorderSizePixel = 0
         addCorner(track, 7)
         track.Parent = row
 
         local knob = Instance.new('Frame')
         knob.Size = UDim2.fromOffset(12, 12)
-        knob.Position = UDim2.fromOffset(item.on and 13 or 1, 1)
+        knob.Position = UDim2.fromOffset(item.on and 1 or 13, 1)
         knob.BackgroundColor3 = Color3.fromRGB(240, 242, 248)
         knob.BorderSizePixel = 0
         addCorner(knob, 99)
         knob.Parent = track
+
+        -- 先摆成「反方向」，再滑到目标状态：开关有动画
+        badge.BackgroundColor3 = item.on and Color3.fromRGB(214, 68, 78) or Color3.fromRGB(48, 176, 88)
+        tickGroup.Visible = not item.on
+        crossGroup.Visible = item.on
+
+        task.defer(function()
+            TweenService:Create(track, TweenInfo.new(0.28, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+                BackgroundColor3 = item.on and Color3.fromRGB(128, 92, 255) or Color3.fromRGB(52, 56, 66),
+            }):Play()
+            TweenService:Create(knob, TweenInfo.new(0.30, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+                Position = UDim2.fromOffset(item.on and 13 or 1, 1),
+            }):Play()
+            TweenService:Create(badge, TweenInfo.new(0.2), {
+                BackgroundColor3 = item.on and Color3.fromRGB(48, 176, 88) or Color3.fromRGB(214, 68, 78),
+            }):Play()
+            task.delay(0.12, function()
+                if row.Parent then
+                    tickGroup.Visible = item.on
+                    crossGroup.Visible = not item.on
+                end
+            end)
+        end)
 
         table.insert(rowObjects, row)
     end
@@ -34963,17 +35278,37 @@ end
 
         expanded = false
         collapseToken += 1
-        TweenService:Create(islandRoot, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {
+        TweenService:Create(body, TweenInfo.new(0.12), { GroupTransparency = 1 }):Play()
+        TweenService:Create(mini, TweenInfo.new(0.12), { GroupTransparency = 1 }):Play()
+        TweenService:Create(islandRoot, TweenInfo.new(0.26, Enum.EasingStyle.Quint), {
             Size = UDim2.fromOffset(176, 40),
         }):Play()
-        TweenService:Create(body, TweenInfo.new(0.12), { GroupTransparency = 1 }):Play()
-        TweenService:Create(mini, TweenInfo.new(0.18), { GroupTransparency = 0 }):Play()
 
         local token = collapseToken
-        task.delay(0.22, function()
-            if token == collapseToken and not expanded then
-                body.Visible = false
+        task.delay(0.26, function()
+            if token ~= collapseToken or expanded then
+                return
             end
+            body.Visible = false
+            if islandRoot:IsA('CanvasGroup') then
+                TweenService:Create(islandRoot, TweenInfo.new(0.18), { GroupTransparency = 1 }):Play()
+            end
+            task.delay(0.20, function()
+                if token ~= collapseToken or expanded then
+                    return
+                end
+                -- 完全隐藏 + 清掉上一次的残留，下次推送从干净状态开始
+                islandRoot.Visible = false
+                islandGui.Enabled = false
+                clearIslandRows()
+                table.clear(history)
+                miniTitle.Text = 'YZ HUB'
+                miniSub.Text = '等待操作'
+                statusDot.BackgroundColor3 = Color3.fromRGB(128, 92, 255)
+                if islandRoot:IsA('CanvasGroup') then
+                    islandRoot.GroupTransparency = 1
+                end
+            end)
         end)
     end
 
@@ -34981,6 +35316,13 @@ end
         expanded = true
         collapseToken += 1
         body.Visible = true
+
+        islandGui.Enabled = true
+        islandRoot.Visible = true
+        if islandRoot:IsA('CanvasGroup') then
+            islandRoot.GroupTransparency = 1
+            TweenService:Create(islandRoot, TweenInfo.new(0.16), { GroupTransparency = 0 }):Play()
+        end
 
         local height = 16 + math.max(#history, 1) * 26
         TweenService:Create(islandRoot, TweenInfo.new(0.32, Enum.EasingStyle.Quint), {
@@ -35060,7 +35402,11 @@ end
             islandRoot.Position = UDim2.new(0.5, 0, 0, 14)
         end
 
-        islandGui.Enabled = (not _G.YZIntroActive) and not (Toggles.Island and Toggles.Island.Value == false)
+        local off = _G.YZIntroActive or (Toggles.Island and Toggles.Island.Value == false)
+        if off then
+            islandGui.Enabled = false
+            islandRoot.Visible = false
+        end
     end
 
     --==================== 开关显示（模块列表） ====================
@@ -35309,46 +35655,15 @@ end
         end,
     })
 
-    local listGroup = uiTab:AddLeftGroupbox('开关显示', 'list')
-    Toggles.ModuleList = listGroup:AddToggle('ModuleList', {
-        Text = '启用开关显示',
-        Default = false,
-        Tooltip = '在屏幕角落列出当前已开启的功能（仿 LiquidBounce 模块列表）',
-    })
-    Toggles.ModuleListSortWidth = listGroup:AddToggle('ModuleListSortWidth', {
-        Text = '按文字宽度排序',
-        Default = true,
-        Tooltip = '像截图那样，越长的名字排越上面；关闭则按名字首字母排序',
-    })
-    Options.ModuleListPos = WXDrop(listGroup, 'ModuleListPos', {
-        Text = '位置',
-        Values = { '右上', '左上', '右下', '左下' },
-        Default = 1,
-    })
-    Options.ModuleListScale = listGroup:AddSlider('ModuleListScale', {
-        Text = '大小', Default = 100, Min = 60, Max = 200, Rounding = 0, Suffix = ' %', Compact = false,
-    })
-    Options.ModuleListShadow = listGroup:AddSlider('ModuleListShadow', {
-        Text = '阴影强度', Default = 80, Min = 0, Max = 100, Rounding = 0, Suffix = ' %', Compact = false,
-    })
-    do
-        local colors = listGroup:AddLabel('颜色')
-        colors:AddColorPicker('ModuleListTextColor', { Default = Color3.fromRGB(245, 246, 250), Title = '文字颜色' })
-        colors:AddColorPicker('ModuleListBgColor', { Default = Color3.fromRGB(12, 12, 14), Title = '背景颜色' })
-    end
-
-    -- 这几个开关不参与「开关显示」列表
+    -- 这几个开关不推送灵动岛
     listIgnore[Toggles.Island] = true
     listIgnore[Toggles.IslandShowToggle] = true
-    listIgnore[Toggles.ModuleList] = true
-    listIgnore[Toggles.ModuleListSortWidth] = true
 
     -- 设置变化立即生效
-    for _, toggle in ipairs({ Toggles.Island, Toggles.IslandShowToggle, Toggles.ModuleList, Toggles.ModuleListSortWidth }) do
+    for _, toggle in ipairs({ Toggles.Island, Toggles.IslandShowToggle }) do
         if toggle then
             toggle:OnChanged(function()
                 pcall(applyIslandSettings)
-                pcall(applyListSettings)
             end)
         end
     end
@@ -35359,24 +35674,8 @@ end
             end)
         end
     end
-    for _, option in ipairs({ Options.ModuleListScale, Options.ModuleListShadow, Options.ModuleListPos,
-        Options.ModuleListTextColor, Options.ModuleListBgColor }) do
-        if option and option.OnChanged then
-            option:OnChanged(function()
-                pcall(applyListSettings)
-            end)
-        end
-    end
 
     applyIslandSettings()
-    applyListSettings()
-
-    -- 启动问候（和原版的 “Neverlose / Ready” 一个意思）
-    task.delay(2, function()
-        if Toggles.Island and Toggles.Island.Value then
-            islandPush('YZ HUB', '已就绪', true)
-        end
-    end)
 
     --==================== 开关信息 → 灵动岛 ====================
     local ignoreIsland = {
@@ -35729,19 +36028,11 @@ end
 
     local Lighting = game:GetService('Lighting')
 
-    -- 三段缓出：62% → 27% → 11%
+    -- 平滑缓出：一条 quint-out 曲线跑到底
     local function ease3(t)
         if t <= 0 then return 0 end
         if t >= 1 then return 1 end
-        if t < 0.33 then
-            local k = t / 0.33
-            return 0.62 * (1 - (1 - k) ^ 3)
-        elseif t < 0.66 then
-            local k = (t - 0.33) / 0.33
-            return 0.62 + 0.27 * (1 - (1 - k) ^ 3)
-        end
-        local k = (t - 0.66) / 0.34
-        return 0.89 + 0.11 * (1 - (1 - k) ^ 3)
+        return 1 - (1 - t) ^ 5
     end
 
     local function seg(t, t0, t1)
@@ -35752,7 +36043,6 @@ end
 
     local RED = Color3.fromRGB(228, 60, 90)
 
-    -- 背景模糊：只糊，不挡（FA 的效果）
     local blur = Instance.new('BlurEffect')
     blur.Name = 'YZIntroBlur'
     blur.Size = 0
@@ -35790,7 +36080,6 @@ end
     dim.BorderSizePixel = 0
     dim.Parent = gui
 
-    -- 字标容器
     local word = Instance.new('Frame')
     word.AnchorPoint = Vector2.new(0.5, 0.5)
     word.Position = UDim2.new(0.5, 0, 0.5, 0)
@@ -35826,7 +36115,6 @@ end
         letters[i] = label
     end
 
-    -- 字标下的红线
     local accent = Instance.new('Frame')
     accent.AnchorPoint = Vector2.new(0.5, 0)
     accent.Position = UDim2.new(0.5, 0, 1, -6)
@@ -35836,115 +36124,16 @@ end
     accent.BorderSizePixel = 0
     accent.Parent = word
 
-    -- FaceID 卡片
-    local faceWrap = Instance.new('Frame')
-    faceWrap.AnchorPoint = Vector2.new(0.5, 0.5)
-    faceWrap.Position = UDim2.new(0.5, 0, 0.645, 0)
-    faceWrap.Size = UDim2.fromOffset(140, 140)
-    faceWrap.BackgroundTransparency = 1
-    faceWrap.Parent = gui
-
-    local faceScale = Instance.new('UIScale')
-    faceScale.Scale = 0.92
-    faceScale.Parent = faceWrap
-
-    local faceCard = Instance.new('Frame')
-    faceCard.Size = UDim2.fromScale(1, 1)
-    faceCard.BackgroundColor3 = Color3.fromRGB(12, 12, 17)
-    faceCard.BackgroundTransparency = 1
-    faceCard.BorderSizePixel = 0
-    faceCard.ClipsDescendants = true
-    faceCard.Parent = faceWrap
-    do
-        local c = Instance.new('UICorner')
-        c.CornerRadius = UDim.new(0, 32)
-        c.Parent = faceCard
-    end
-
-    local faceStroke = Instance.new('UIStroke')
-    faceStroke.Color = RED
-    faceStroke.Thickness = 1.5
-    faceStroke.Transparency = 1
-    faceStroke.Parent = faceCard
-
-    local avatar = Instance.new('ImageLabel')
-    avatar.Size = UDim2.fromOffset(118, 118)
-    avatar.Position = UDim2.fromOffset(11, 11)
-    avatar.BackgroundTransparency = 1
-    avatar.BorderSizePixel = 0
-    avatar.ScaleType = Enum.ScaleType.Crop
-    avatar.ImageTransparency = 1
-    avatar.Image = string.format('rbxthumb://type=AvatarHeadShot&id=%d&w=420&h=420', LP.UserId)
-    avatar.Parent = faceCard
-    do
-        local c = Instance.new('UICorner')
-        c.CornerRadius = UDim.new(0, 24)
-        c.Parent = avatar
-    end
-
-    local scan = Instance.new('Frame')
-    scan.Size = UDim2.new(1, -18, 0, 2)
-    scan.Position = UDim2.fromOffset(9, 6)
-    scan.BackgroundColor3 = RED
-    scan.BackgroundTransparency = 1
-    scan.BorderSizePixel = 0
-    scan.Parent = faceCard
-
-    local check = Instance.new('TextLabel')
-    check.Size = UDim2.fromScale(1, 1)
-    check.BackgroundTransparency = 1
-    check.BorderSizePixel = 0
-    check.Font = Enum.Font.GothamBlack
-    check.Text = '✓'
-    check.TextSize = 58
-    check.TextColor3 = Color3.fromRGB(235, 240, 246)
-    check.TextTransparency = 1
-    check.Parent = faceCard
-
-    local checkScale = Instance.new('UIScale')
-    checkScale.Scale = 0.5
-    checkScale.Parent = check
-
-    local nameLabel = Instance.new('TextLabel')
-    nameLabel.AnchorPoint = Vector2.new(0.5, 0)
-    nameLabel.Position = UDim2.new(0.5, 0, 0.645, 84)
-    nameLabel.Size = UDim2.fromOffset(420, 24)
-    nameLabel.BackgroundTransparency = 1
-    nameLabel.Font = Enum.Font.GothamBold
-    nameLabel.Text = tostring(LP.DisplayName)
-    nameLabel.TextSize = 17
-    nameLabel.TextColor3 = Color3.new(1, 1, 1)
-    nameLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
-    nameLabel.TextStrokeTransparency = 0.5
-    nameLabel.TextTransparency = 1
-    nameLabel.Parent = gui
-
-    local welcome = Instance.new('TextLabel')
-    welcome.AnchorPoint = Vector2.new(0.5, 0)
-    welcome.Position = UDim2.new(0.5, 0, 0.645, 108)
-    welcome.Size = UDim2.fromOffset(420, 18)
-    welcome.BackgroundTransparency = 1
-    welcome.Font = Enum.Font.Gotham
-    welcome.Text = '欢迎使用 YZ HUB'
-    welcome.TextSize = 12
-    welcome.TextColor3 = Color3.fromRGB(190, 195, 210)
-    welcome.TextStrokeColor3 = Color3.new(0, 0, 0)
-    welcome.TextStrokeTransparency = 0.7
-    welcome.TextTransparency = 1
-    welcome.Parent = gui
-
-    -- ===== 一条时间轴驱动所有元素，保证连续不卡顿 =====
-    local DURATION = 4.7
+    -- ===== 一条时间轴驱动所有元素 =====
+    local DURATION = 3.3
     local startClock = os.clock()
 
     local function update(t)
-        -- 0) 模糊 + 轻微压暗
-        local P = seg(t, 0, 0.55)
+        local P = seg(t, 0, 0.50)
         blur.Size = 10 * P
         dim.BackgroundTransparency = 1 - 0.45 * P
 
-        -- 1) YZ 居中升起 → 整体左滑；HUB 从下方升起
-        local slide = seg(t, 1.05, 1.80)
+        local slide = seg(t, 1.00, 1.70)
         local gx = 1.5 * SP * (1 - slide)
 
         for i = 1, 5 do
@@ -35952,10 +36141,10 @@ end
             local riseStart, riseEnd
             if i <= 2 then
                 riseStart = 0.10 + (i - 1) * 0.08
-                riseEnd = riseStart + 0.75
+                riseEnd = riseStart + 0.72
             else
-                riseStart = 1.05 + (i - 3) * 0.08
-                riseEnd = riseStart + 0.75
+                riseStart = 1.00 + (i - 3) * 0.08
+                riseEnd = riseStart + 0.72
             end
 
             local r = seg(t, riseStart, riseEnd)
@@ -35964,64 +36153,23 @@ end
             label.TextTransparency = 1 - r
         end
 
-        -- 2) 红线撑开
-        local lineP = seg(t, 1.40, 1.80)
+        local lineP = seg(t, 1.35, 1.75)
         accent.Size = UDim2.new(0, 560 * lineP, 0, 2)
         accent.BackgroundTransparency = 1 - 0.25 * lineP
 
-        -- 3) 字标整体上移缩小，给 FaceID 让位置
-        local up = seg(t, 1.95, 2.45)
-        word.Position = UDim2.new(0.5, 0, 0.5 - 0.185 * up, 0)
-        wordScale.Scale = 1 - 0.40 * up
-        accent.BackgroundTransparency = (1 - 0.25 * lineP) + 0.75 * up
-
-        -- 4) FaceID 出现
-        local fp = seg(t, 2.30, 2.70)
-        faceCard.BackgroundTransparency = 1 - 0.94 * fp
-        faceStroke.Transparency = 1 - 0.9 * fp
-        avatar.ImageTransparency = 1 - fp
-        faceScale.Scale = 0.92 + 0.08 * fp
-
-        -- 5) 扫描线
-        local sp = seg(t, 2.70, 3.35)
-        if sp > 0 and sp < 1 then
-            scan.BackgroundTransparency = 0.15
-            scan.Position = UDim2.fromOffset(9, 6 + 126 * sp)
-        else
-            scan.BackgroundTransparency = 1
-        end
-
-        -- 6) 打勾
-        local cp = seg(t, 3.35, 3.62)
-        check.TextTransparency = 1 - cp
-        checkScale.Scale = 0.5 + 0.5 * cp
-        avatar.ImageTransparency = math.max(avatar.ImageTransparency, 0.45 * cp)
-
-        -- 7) 名字 / 欢迎语
-        local np = seg(t, 3.50, 3.85)
-        nameLabel.TextTransparency = 1 - np
-        welcome.TextTransparency = 1 - np
-
-        -- 8) 整体淡出（不动黑幕，直接回游戏画面）+ 模糊归零
-        local out = seg(t, 4.05, 4.60)
+        -- 最后整体淡出：字标、红线、压暗一起退场，模糊归零
+        local out = seg(t, 2.45, 3.05)
         if out > 0 then
             for i = 1, 5 do
                 letters[i].TextTransparency = math.max(letters[i].TextTransparency, out)
             end
             accent.BackgroundTransparency = math.max(accent.BackgroundTransparency, out)
-            faceCard.BackgroundTransparency = math.max(faceCard.BackgroundTransparency, out)
-            faceStroke.Transparency = math.max(faceStroke.Transparency, out)
-            avatar.ImageTransparency = math.max(avatar.ImageTransparency, out)
-            check.TextTransparency = math.max(check.TextTransparency, out)
-            nameLabel.TextTransparency = math.max(nameLabel.TextTransparency, out)
-            welcome.TextTransparency = math.max(welcome.TextTransparency, out)
             dim.BackgroundTransparency = math.max(dim.BackgroundTransparency, out)
             blur.Size = 10 * (1 - out)
         end
     end
 
     task.spawn(function()
-        -- 先等两帧，让界面彻底建完再开始，避免第一帧卡顿
         RunService.RenderStepped:Wait()
         RunService.RenderStepped:Wait()
 
@@ -36037,7 +36185,6 @@ end
             RunService.RenderStepped:Wait()
         end
 
-        -- 收尾：显示菜单 + HUD，清掉模糊和遮罩
         _G.YZIntroActive = false
         if not Library.Toggled then
             pcall(function()
