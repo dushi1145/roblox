@@ -22296,15 +22296,6 @@ Options.CsHudScale = CsHudGroup:AddSlider('CsHudScale', {
     Text = '状态栏大小', Default = 100, Min = 60, Max = 150, Rounding = 0, Suffix = ' %', Compact = false
 })
 
-Toggles.CsWeaponSwitch = CsHudGroup:AddToggle('CsWeaponSwitch', {
-    Text = '武器切换提示',
-    Default = true,
-    Tooltip = '切换武器时在状态栏上方弹出武器列表（CS 风格）'
-})
-Options.CsWeaponSwitchDuration = CsHudGroup:AddSlider('CsWeaponSwitchDuration', {
-    Text = '提示停留（秒）', Default = 2.5, Min = 0.5, Max = 8, Rounding = 1, Compact = false
-})
-
 CsHudGroup:AddDivider()
 Toggles.HideRobloxBackpack = CsHudGroup:AddToggle('HideRobloxBackpack', {
     Text = '隐藏罗布乐思物品栏',
@@ -34002,7 +33993,7 @@ end)()
     local root = Instance.new('Frame')
     root.AnchorPoint = Vector2.new(0.5, 1)
     root.Position = UDim2.new(0.5, 0, 1, -16)
-    root.Size = UDim2.new(1, -140, 0, 56)
+    root.Size = UDim2.new(0.52, 0, 0, 56)
     root.BackgroundTransparency = 1
     root.Parent = hudGui
 
@@ -34014,7 +34005,7 @@ end)()
     local divider = Instance.new('Frame')
     divider.AnchorPoint = Vector2.new(0.5, 0.5)
     divider.Position = UDim2.new(0.5, 0, 0.5, 0)
-    divider.Size = UDim2.new(1, -300, 0, 1)
+    divider.Size = UDim2.new(1, -290, 0, 1)
     divider.BackgroundColor3 = Color3.new(1, 1, 1)
     divider.BackgroundTransparency = 0.72
     divider.BorderSizePixel = 0
@@ -34023,7 +34014,7 @@ end)()
     -- 左：血量
     local hpGroup = Instance.new('Frame')
     hpGroup.AnchorPoint = Vector2.new(0, 0.5)
-    hpGroup.Position = UDim2.new(0, 26, 0.5, 0)
+    hpGroup.Position = UDim2.new(0, 8, 0.5, 0)
     hpGroup.Size = UDim2.fromOffset(160, 44)
     hpGroup.BackgroundTransparency = 1
     hpGroup.Parent = root
@@ -34105,7 +34096,7 @@ end)()
     -- 右：弹药
     local ammoGroup = Instance.new('Frame')
     ammoGroup.AnchorPoint = Vector2.new(1, 0.5)
-    ammoGroup.Position = UDim2.new(1, -26, 0.5, 0)
+    ammoGroup.Position = UDim2.new(1, -8, 0.5, 0)
     ammoGroup.Size = UDim2.fromOffset(200, 44)
     ammoGroup.BackgroundTransparency = 1
     ammoGroup.Parent = root
@@ -34151,106 +34142,6 @@ end)()
     curText.Size = UDim2.fromOffset(70, 32)
     curText.TextXAlignment = Enum.TextXAlignment.Right
 
-    --// ===== 武器切换列表 =====
-    local switchGui = mkGui('YZWeaponSwitch', 9890)
-
-    local switchRoot = Instance.new('Frame')
-    switchRoot.AnchorPoint = Vector2.new(0.5, 1)
-    switchRoot.Position = UDim2.new(0.5, 0, 1, -86)
-    switchRoot.Size = UDim2.fromOffset(0, 28)
-    switchRoot.AutomaticSize = Enum.AutomaticSize.X
-    switchRoot.BackgroundTransparency = 1
-    switchRoot.Visible = false
-    switchRoot.Parent = switchGui
-
-    local switchLayout = Instance.new('UIListLayout')
-    switchLayout.FillDirection = Enum.FillDirection.Horizontal
-    switchLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-    switchLayout.VerticalAlignment = Enum.VerticalAlignment.Center
-    switchLayout.Padding = UDim.new(0, 6)
-    switchLayout.Parent = switchRoot
-
-    local switchTokens = 0
-
-    local function applyHudScale()
-        hudScale.Scale = math.clamp((tonumber(Options.CsHudScale and Options.CsHudScale.Value) or 100) / 100, 0.5, 2)
-    end
-
-    local function applyHudVisible()
-        local on = Toggles.CsBottomHud == nil or Toggles.CsBottomHud.Value ~= false
-        hudGui.Enabled = on
-    end
-
-    local function getToolList()
-        local list = {}
-        local seen = {}
-        local function add(t)
-            if t and t:IsA('Tool') and not seen[t] then
-                seen[t] = true
-                list[#list + 1] = t
-            end
-        end
-
-        local bp = LP:FindFirstChildOfClass('Backpack') or LP:FindFirstChild('Backpack')
-        if bp then
-            for _, t in ipairs(bp:GetChildren()) do
-                add(t)
-            end
-        end
-        local char = LP.Character
-        if char then
-            local equipped = char:FindFirstChildOfClass('Tool')
-            if equipped then
-                add(equipped)
-            end
-        end
-        return list
-    end
-
-    local function rebuildSwitch(tools, current)
-        for _, c in ipairs(switchRoot:GetChildren()) do
-            if c:IsA('Frame') then
-                c:Destroy()
-            end
-        end
-
-        for i, tool in ipairs(tools) do
-            local isCurrent = (tool == current)
-
-            local slot = Instance.new('Frame')
-            slot.Size = UDim2.fromOffset(0, 26)
-            slot.AutomaticSize = Enum.AutomaticSize.X
-            slot.BackgroundColor3 = isCurrent and Color3.fromRGB(74, 130, 214) or Color3.fromRGB(18, 20, 26)
-            slot.BackgroundTransparency = isCurrent and 0.15 or 0.35
-            slot.BorderSizePixel = 0
-            slot.Parent = switchRoot
-            corner(slot, 5)
-
-            local pad = Instance.new('UIPadding')
-            pad.PaddingLeft = UDim.new(0, 8)
-            pad.PaddingRight = UDim.new(0, 8)
-            pad.Parent = slot
-
-            local lay = Instance.new('UIListLayout')
-            lay.FillDirection = Enum.FillDirection.Horizontal
-            lay.VerticalAlignment = Enum.VerticalAlignment.Center
-            lay.HorizontalAlignment = Enum.HorizontalAlignment.Left
-            lay.Padding = UDim.new(0, 5)
-            lay.Parent = slot
-
-            local num = mkText(slot, tostring(i), 11, isCurrent and Color3.new(1, 1, 1) or Color3.fromRGB(150, 160, 175), true)
-            num.Size = UDim2.fromOffset(0, 26)
-            num.AutomaticSize = Enum.AutomaticSize.X
-            num.TextTransparency = isCurrent and 0 or 0.25
-
-            local name = mkText(slot, tool.Name, 12, isCurrent and Color3.new(1, 1, 1) or Color3.fromRGB(225, 230, 240), true)
-            name.Size = UDim2.fromOffset(0, 26)
-            name.AutomaticSize = Enum.AutomaticSize.X
-        end
-    end
-
-    local lastSig = ''
-
     local function updateOnce()
         -- 血量
         local hum = LP.Character and LP.Character:FindFirstChildOfClass('Humanoid')
@@ -34284,34 +34175,6 @@ end)()
             sepText.Visible = false
             magIcon.Visible = false
         end
-
-        -- 武器列表
-        local tools = getToolList()
-        local names = {}
-        for _, t in ipairs(tools) do
-            names[#names + 1] = t.Name
-        end
-        local sig = table.concat(names, '|') .. '#' .. tostring(tool and tool.Name)
-        if sig ~= lastSig then
-            lastSig = sig
-            rebuildSwitch(tools, tool)
-
-            local showSwitch = (Toggles.CsWeaponSwitch == nil or Toggles.CsWeaponSwitch.Value ~= false) and #tools > 0
-            if showSwitch then
-                switchGui.Enabled = true
-                switchRoot.Visible = true
-                switchTokens += 1
-                local token = switchTokens
-                local hold = tonumber(Options.CsWeaponSwitchDuration and Options.CsWeaponSwitchDuration.Value) or 2.5
-                task.delay(math.clamp(hold, 0.5, 8), function()
-                    if token == switchTokens then
-                        switchRoot.Visible = false
-                    end
-                end)
-            else
-                switchRoot.Visible = false
-            end
-        end
     end
 
     task.spawn(function()
@@ -34319,7 +34182,7 @@ end)()
         applyHudScale()
         applyHudVisible()
 
-        for _, option in ipairs({ Options.CsHudScale, Options.CsWeaponSwitchDuration }) do
+        for _, option in ipairs({ Options.CsHudScale }) do
             if option and option.OnChanged then
                 option:OnChanged(function()
                     pcall(applyHudScale)
