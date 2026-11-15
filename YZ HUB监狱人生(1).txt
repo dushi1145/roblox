@@ -22201,7 +22201,7 @@ Toggles.KillfeedShowHits = KillfeedDep:AddToggle('KillfeedShowHits', {
 
 Toggles.KillfeedMergeHits = KillfeedDep:AddToggle('KillfeedMergeHits', {
     Text = '连击合并',
-    Default = true,
+    Default = false,
     Tooltip = '连续命中同一目标时合并成一条播报并累加伤害，避免刷屏'
 })
 
@@ -33189,13 +33189,14 @@ do
     feedContainer.Name = 'FeedContainer'
     -- 锚点固定在左上角，并且整体压到 Roblox 顶部导航栏下面，避免挤在一起
     feedContainer.AnchorPoint = Vector2.new(0, 0)
-    feedContainer.Size = UDim2.new(0, 360, 0, 380)
+    feedContainer.Size = UDim2.fromOffset(0, 0)
+    feedContainer.AutomaticSize = Enum.AutomaticSize.XY
     feedContainer.Position = UDim2.new(0, 12, 0, 64)
     feedContainer.BackgroundTransparency = 1
     feedContainer.ClipsDescendants = false
     feedContainer.Parent = feedGui
 
-    _G.YZAddMovable({ name = '击杀播报', root = feedContainer })
+    _G.YZAddMovable({ name = '命中信息', root = feedContainer, demoKey = 'YZFeedDemo' })
 
     -- 整体缩放（默认比原版小一圈，可在"界面缩放"里调）
     local feedScale = Instance.new('UIScale')
@@ -33215,7 +33216,7 @@ do
     listLayout.FillDirection = Enum.FillDirection.Vertical
     listLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
     listLayout.VerticalAlignment = Enum.VerticalAlignment.Top
-    listLayout.Padding = UDim.new(0, 5)
+    listLayout.Padding = UDim.new(0, 1)
     listLayout.SortOrder = Enum.SortOrder.LayoutOrder
     listLayout.Parent = feedContainer
 
@@ -33296,14 +33297,15 @@ do
     end
 
     local function pushKillfeedEntry(killer, victim, weaponName, isHeadshot, distanceStuds, extra)
-        if not (Toggles.Killfeed and Toggles.Killfeed.Value) then return end
+        local forced = _G.YZFeedForce == true
+        if not forced and not (Toggles.Killfeed and Toggles.Killfeed.Value) then return end
 
         local isHit = (extra ~= nil and extra.kind == 'hit')
         local hitDamage = (extra and tonumber(extra.damage)) or 0
 
         if isHit then
-            if Toggles.KillfeedShowHits and Toggles.KillfeedShowHits.Value == false then return end
-            if killer ~= LP then return end
+            if not forced and Toggles.KillfeedShowHits and Toggles.KillfeedShowHits.Value == false then return end
+            if not forced and killer ~= LP then return end
         end
 
         local isMyKill = (killer == LP)
@@ -33427,6 +33429,34 @@ do
         scheduleExpire(entryData, duration)
     end
 
+    -- 编辑 UI 时用的示例行
+    _G.YZFeedDemo = function()
+        local samples = {
+            { name = 'oepqe67', damage = 56, hp = 45, died = false },
+            { name = 'wwrrt_5', damage = 45, hp = 0, died = true },
+            { name = 'choko08240', damage = 56, hp = 45, died = false },
+        }
+        for _, s in ipairs(samples) do
+            pcall(pushKillfeedEntry, LP, { Name = s.name, DisplayName = s.name }, 'Carbine', true, 30, {
+                kind = 'hit',
+                damage = s.damage,
+                part = 'Head',
+                hp = s.hp,
+                died = s.died,
+            })
+        end
+    end
+
+    _G.YZFeedClear = function()
+        for _, entry in ipairs(activeEntries) do
+            if entry.frame then
+                pcall(function() entry.frame:Destroy() end)
+            end
+        end
+        table.clear(activeEntries)
+        table.clear(hitEntryByVictim)
+    end
+
     _G.BoarsAddKillfeed = function(killer, victim, weapon, isHead, dist, extra)
         pcall(function()
             pushKillfeedEntry(killer, victim, weapon, isHead, dist, extra)
@@ -33520,19 +33550,21 @@ end
     local msgRoot = Instance.new('Frame')
     msgRoot.AnchorPoint = Vector2.new(0.5, 1)
     msgRoot.Position = UDim2.new(0.5, 0, 0.90, 0)
-    msgRoot.Size = UDim2.fromOffset(700, 30)
+    msgRoot.Size = UDim2.fromOffset(0, 30)
+    msgRoot.AutomaticSize = Enum.AutomaticSize.X
     msgRoot.BackgroundTransparency = 1
     msgRoot.Visible = false
     msgRoot.Parent = msgGui
 
-    _G.YZAddMovable({ name = '击杀消息', root = msgRoot })
+    _G.YZAddMovable({ name = '击杀消息', root = msgRoot, demoKey = 'YZKillMsgDemo' })
 
     local msgScale = Instance.new('UIScale')
     msgScale.Scale = 1
     msgScale.Parent = msgRoot
 
     local msgLabel = Instance.new('TextLabel')
-    msgLabel.Size = UDim2.fromScale(1, 1)
+    msgLabel.Size = UDim2.fromOffset(0, 30)
+    msgLabel.AutomaticSize = Enum.AutomaticSize.X
     msgLabel.BackgroundTransparency = 1
     msgLabel.BorderSizePixel = 0
     msgLabel.Font = Enum.Font.GothamBold
@@ -33546,6 +33578,19 @@ end
     msgLabel.Text = ''
     msgLabel.Parent = msgRoot
 
+    -- UI 编辑时展示的示例文本
+    _G.YZKillMsgDemo = function()
+        applyMsgScale()
+        msgLabel.Text = '你 使用 <font color="#FFD166">Carbine</font> 击败了 <font color="#FF5A5A">oepqe67</font>'
+        msgLabel.TextTransparency = 0
+        msgRoot.Visible = true
+    end
+
+    _G.YZKillMsgClear = function()
+        msgLabel.Text = ''
+        msgRoot.Visible = false
+    end
+
     local msgToken = 0
 
     local function applyMsgScale()
@@ -33553,7 +33598,7 @@ end
     end
 
     local function pushKillMsg(killer, victim, weapon)
-        if Toggles.PubgKillMsg and Toggles.PubgKillMsg.Value == false then
+        if not _G.YZKillMsgForce and Toggles.PubgKillMsg and Toggles.PubgKillMsg.Value == false then
             return
         end
 
@@ -33597,6 +33642,8 @@ end
         end)
     end
 
+    _G.YZPushKillMsg = pushKillMsg
+
     --// ===== 接到击杀事件上 =====
     local prevAddKillfeed = _G.BoarsAddKillfeed
     _G.BoarsAddKillfeed = function(killer, victim, weapon, isHead, dist, extra)
@@ -33632,6 +33679,7 @@ end)()
 
 -- ====================== HUD 拖动编辑（虚线框 + 完成按钮） ======================
 ; (function()
+    local TweenService = game:GetService('TweenService')
     local entries = _G.YZMovableHud or {}
 
     local editorGui = Instance.new('ScreenGui')
@@ -33748,6 +33796,8 @@ end)()
     local dragData = nil
     local dragStart = Vector2.zero
     local dragBase = Vector2.zero
+    local dragTarget = nil
+    local dragCurrent = nil
 
     beginDrag = function(data, input)
         if not data or not data.entry or not data.entry.root then
@@ -33758,6 +33808,8 @@ end)()
         dragData = data
         dragStart = Vector2.new(input.Position.X, input.Position.Y)
         dragBase = Vector2.new(root.AbsolutePosition.X, root.AbsolutePosition.Y)
+        dragTarget = dragBase
+        dragCurrent = dragBase
         root.AnchorPoint = Vector2.new(0, 0)
         root.Position = UDim2.fromOffset(dragBase.X, dragBase.Y)
     end
@@ -33769,11 +33821,7 @@ end)()
         if input.UserInputType == Enum.UserInputType.MouseMovement
             or input.UserInputType == Enum.UserInputType.Touch then
             local delta = Vector2.new(input.Position.X, input.Position.Y) - dragStart
-            local target = dragBase + delta
-            local root = dragData.entry.root
-            if root then
-                root.Position = UDim2.fromOffset(target.X, target.Y)
-            end
+            dragTarget = dragBase + delta
         end
     end)
 
@@ -33781,7 +33829,18 @@ end)()
         if input.UserInputType == Enum.UserInputType.MouseButton1
             or input.UserInputType == Enum.UserInputType.Touch then
             dragging = false
+            -- 松手后一小段回弹收尾，不会硬停
+            if dragData and dragTarget and dragData.entry and dragData.entry.root then
+                local root = dragData.entry.root
+                pcall(function()
+                    TweenService:Create(root, TweenInfo.new(0.12, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+                        Position = UDim2.fromOffset(dragTarget.X, dragTarget.Y),
+                    }):Play()
+                end)
+            end
             dragData = nil
+            dragTarget = nil
+            dragCurrent = nil
         end
     end)
 
@@ -33906,11 +33965,18 @@ end)()
         end
         holders = {}
 
+        _G.YZFeedForce = true
         for _, entry in ipairs(entries) do
             if entry.root then
                 entry.wasVisible = entry.root.Visible
                 entry.root.Visible = true
                 buildHolder(entry)
+                if entry.demoKey then
+                    local demo = _G[entry.demoKey]
+                    if type(demo) == 'function' then
+                        pcall(demo)
+                    end
+                end
             end
         end
 
@@ -33927,6 +33993,13 @@ end)()
         end
         editing = false
         editorGui.Enabled = false
+        _G.YZFeedForce = false
+        if _G.YZFeedClear then
+            pcall(_G.YZFeedClear)
+        end
+        if _G.YZKillMsgClear then
+            pcall(_G.YZKillMsgClear)
+        end
         for _, entry in ipairs(entries) do
             if entry.root and entry.wasVisible ~= nil then
                 entry.root.Visible = entry.wasVisible
@@ -33953,9 +34026,20 @@ end)()
     end
 
     -- 每帧把虚线框贴到元素上（尺寸变了就重画）
-    RunService.RenderStepped:Connect(function()
+    RunService.RenderStepped:Connect(function(dt)
         if not editing then
             return
+        end
+
+        -- 平滑跟随：元素带一点延迟追向鼠标，松手后自然收尾
+        if dragData and dragTarget and dragCurrent and dragData.entry and dragData.entry.root then
+            local root = dragData.entry.root
+            local k = math.clamp(dt * 14, 0, 1)
+            dragCurrent = dragCurrent + (dragTarget - dragCurrent) * k
+            if (dragTarget - dragCurrent).Magnitude < 0.4 then
+                dragCurrent = dragTarget
+            end
+            root.Position = UDim2.fromOffset(dragCurrent.X, dragCurrent.Y)
         end
         for _, data in ipairs(holders) do
             local root = data.entry.root
