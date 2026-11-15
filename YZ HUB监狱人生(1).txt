@@ -22117,7 +22117,7 @@ TargetHUD_Tab:AddDivider()
 
 Options.TargetHUDTheme = WXDrop(TargetHUD_Tab, 'TargetHUDTheme', {
     Values = { '浅色（截图款）', '深色' },
-    Default = 1,
+    Default = 2,
     Multi = false,
     Text = '卡片风格'
 })
@@ -22132,7 +22132,7 @@ Options.TargetHUDScale = TargetHUD_Tab:AddSlider('TargetHUDScale', {
 })
 
 Options.TargetHUDShadow = TargetHUD_Tab:AddSlider('TargetHUDShadow', {
-    Text = '阴影范围', Default = 80, Min = 0, Max = 100, Rounding = 0, Suffix = ' %', Compact = false,
+    Text = '阴影范围', Default = 50, Min = 0, Max = 100, Rounding = 0, Suffix = ' %', Compact = false,
     Tooltip = '数值越大，阴影往外扩得越远'
 })
 
@@ -32461,11 +32461,10 @@ end
     edgeStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
     edgeStroke.Parent = edgeFrame
 
-    -- 照搬参考脚本：8 层同圆角黑框，每层外扩 2px、下移 2px，越外层越透明
-    -- （Base 存的是「透明度」，不是浓度）
+    -- 只留 4 层、每层外扩 1.5px：够软又看不出叠层
     local shadowLayers = {}
-    for i = 1, 8 do
-        local pad = i * 2
+    for i = 1, 4 do
+        local pad = i * 1.5
         local layer = Instance.new('Frame')
         layer.BorderSizePixel = 0
         layer.BackgroundColor3 = Color3.new(0, 0, 0)
@@ -32474,7 +32473,7 @@ end
         layer.Position = UDim2.fromOffset(-pad, -pad + 2)
         addCorner(layer, 16)
         layer.Parent = shadowHolder
-        shadowLayers[i] = { Frame = layer, Base = 0.62 + 0.047 * i }
+        shadowLayers[i] = { Frame = layer, Base = 0.80 + 0.05 * (i - 1) }
     end
 
     -- 卡片
@@ -32766,17 +32765,25 @@ end
     end
 
     local shadowSpreadNow = 0.8
+    local themeDarkNow = true
 
     local function applyStyle()
-        local theme = Options.TargetHUDTheme and Options.TargetHUDTheme.Value or '浅色（截图款）'
+        local theme = Options.TargetHUDTheme and Options.TargetHUDTheme.Value or '深色'
         local dark = theme == '深色'
+        themeDarkNow = dark
 
         local opacity = (tonumber(Options.TargetHUDOpacity and Options.TargetHUDOpacity.Value) or 92) / 100
         opacity = math.clamp(opacity, 0.25, 1)
 
         card.BackgroundColor3 = dark and Color3.fromRGB(22, 22, 26) or Color3.fromRGB(232, 232, 238)
         card.BackgroundTransparency = 1 - (0.94 * opacity)
-        cardStroke.Transparency = 1 - (0.9 * (1 - opacity * 0.6))
+        if dark then
+            cardStroke.Transparency = 0.82
+            edgeStroke.Color = Color3.fromRGB(96, 96, 110)
+        else
+            cardStroke.Transparency = 1 - (0.9 * (1 - opacity * 0.6))
+            edgeStroke.Color = Color3.fromRGB(16, 16, 20)
+        end
         barBack.BackgroundColor3 = dark and Color3.fromRGB(48, 44, 56) or Color3.fromRGB(58, 49, 64)
         barFill.BackgroundColor3 = hpColorNow()
 
@@ -32784,7 +32791,7 @@ end
         shadowSpreadNow = math.clamp((tonumber(Options.TargetHUDShadow and Options.TargetHUDShadow.Value) or 80) / 100, 0, 1)
         local factor = 0.35 + 1.65 * shadowSpreadNow
         for i, layer in ipairs(shadowLayers) do
-            local pad = i * 2 * factor
+            local pad = i * 1.5 * factor
             layer.Frame.Size = UDim2.new(1, pad * 2, 1, pad * 2)
             layer.Frame.Position = UDim2.fromOffset(-pad, -pad + 2)
             layer.Frame.BackgroundTransparency = layer.Base
@@ -33053,7 +33060,7 @@ end
 
             shadowHolder.Visible = alpha > 0.02
             edgeFrame.Visible = alpha > 0.02
-            edgeStroke.Transparency = 1 - (0.65 * alpha)
+            edgeStroke.Transparency = themeDarkNow and (1 - (0.30 * alpha)) or (1 - (0.65 * alpha))
             if shadowHolder.Visible then
                 for _, layer in ipairs(shadowLayers) do
                     layer.Frame.BackgroundTransparency = 1 - ((1 - layer.Base) * alpha)
@@ -34914,10 +34921,10 @@ end
     shadowHolder.ZIndex = 1
     shadowHolder.Parent = islandRoot
 
-    -- 照搬参考脚本的 8 层投影
+    -- 4 层、每层外扩 1.5px：小而柔和，没有一圈圈的层次感
     local shadowLayers = {}
-    for i = 1, 8 do
-        local pad = i * 2
+    for i = 1, 4 do
+        local pad = i * 1.5
         local layer = Instance.new('Frame')
         layer.BorderSizePixel = 0
         layer.BackgroundColor3 = Color3.new(0, 0, 0)
@@ -34926,7 +34933,7 @@ end
         layer.Position = UDim2.fromOffset(-pad, -pad + 2)
         addCorner(layer, 20)
         layer.Parent = shadowHolder
-        shadowLayers[i] = { Frame = layer, Base = 0.62 + 0.047 * i }
+        shadowLayers[i] = { Frame = layer, Base = 0.80 + 0.05 * (i - 1) }
     end
 
     local pill = Instance.new('CanvasGroup')
@@ -35307,7 +35314,7 @@ end
         local spread = math.clamp((tonumber(Options.IslandShadow and Options.IslandShadow.Value) or 70) / 100, 0, 1)
         local factor = 0.35 + 1.65 * spread
         for i, layer in ipairs(shadowLayers) do
-            local pad = i * 2 * factor
+            local pad = i * 1.5 * factor
             layer.Frame.Size = UDim2.new(1, pad * 2, 1, pad * 2)
             layer.Frame.Position = UDim2.fromOffset(-pad, -pad + 2)
             layer.Frame.BackgroundTransparency = 1 - ((1 - layer.Base) * opacity)
@@ -35570,7 +35577,7 @@ end
         Text = '大小', Default = 100, Min = 60, Max = 180, Rounding = 0, Suffix = ' %', Compact = false,
     })
     Options.IslandShadow = islandGroup:AddSlider('IslandShadow', {
-        Text = '阴影范围', Default = 70, Min = 0, Max = 100, Rounding = 0, Suffix = ' %', Compact = false,
+        Text = '阴影范围', Default = 50, Min = 0, Max = 100, Rounding = 0, Suffix = ' %', Compact = false,
         Tooltip = '数值越大，阴影往外扩得越远',
     })
     Options.IslandHold = islandGroup:AddSlider('IslandHold', {
