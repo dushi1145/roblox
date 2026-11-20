@@ -21174,24 +21174,6 @@ Toggles.RageBotAutoEquip = Rage_Tab:AddToggle('RageBotAutoEquip', { Text = '自�
 Toggles.RageBotAutoWeapon = Rage_Tab:AddToggle('RageBotAutoWeapon', { Text = '自动拾取武器', Default = false })
 Rage_Tab:AddDivider()
 Toggles.RageBotShootThroughCars = Rage_Tab:AddToggle('RageBotShootThroughCars', { Text = '穿车射击', Default = true })
-Toggles.RageWallBang = Rage_Tab:AddToggle('RageWallBang', {
-    Text = '穿墙射击（无视障碍）',
-    Default = false,
-    Tooltip = '不做视线检测，墙后目标照样锁定并直接发包；能否命中取决于服务端是否校验弹道',
-})
-Toggles.RageWallBangCheck = Rage_Tab:AddToggle('RageWallBangCheck', {
-    Text = '穿墙时可击杀检查',
-    Default = true,
-    Tooltip = '只打存活、没有出生保护、且在穿墙射程内的目标，避免一直对着打不了的人开枪',
-})
-Options.RageWallBangRange = Rage_Tab:AddSlider('RageWallBangRange', {
-    Text = '穿墙最大距离', Default = 400, Min = 50, Max = 1500, Rounding = 0, Compact = false,
-})
-Options.RageWallBangMode = WXDrop(Rage_Tab, 'RageWallBangMode', {
-    Text = '穿墙发包原点',
-    Values = { '真实原点（推荐）', '贴身原点' },
-    Default = 1,
-})
 Options.RageBotCarPenetration = WXDrop(Rage_Tab, 'RageBotCarPenetration', { Text = '载具穿透模式', Values = { 'Windows & Non-Solid', 'All Car Parts' }, Default = 1 })
 Toggles.RageBotDisableInVehicle = Rage_Tab:AddToggle('RageBotDisableInVehicle', { Text = '载具内禁用', Default = true })
 Rage_Tab:AddDivider()
@@ -23815,34 +23797,6 @@ local function getLagCompensatedOrigin()
 end
 
 local function hasLineOfSight(from, to, targetPlayer)
-    -- 穿墙模式：跳过所有视线 / 射线检测，墙后目标也直接返回可见
-    if Toggles.RageWallBang and Toggles.RageWallBang.Value then
-        -- 可击杀检查：避免对着打不了的人（死亡 / 出生保护 / 太远 / 没角色）一直开枪
-        if Toggles.RageWallBangCheck == nil or Toggles.RageWallBangCheck.Value then
-            if targetPlayer then
-                local tchar = targetPlayer.Character
-                if not tchar or not tchar.Parent then
-                    return false
-                end
-                local thum = tchar:FindFirstChildOfClass('Humanoid')
-                if not thum or thum.Health <= 0 then
-                    return false
-                end
-                if tchar:FindFirstChildOfClass('ForceField') then
-                    return false
-                end
-                if not tchar:FindFirstChild('HumanoidRootPart') then
-                    return false
-                end
-                local maxRange = tonumber(Options.RageWallBangRange and Options.RageWallBangRange.Value) or 400
-                if (to - from).Magnitude > maxRange then
-                    return false
-                end
-            end
-        end
-        return true
-    end
-
     local targetChar = targetPlayer and targetPlayer.Character
     local targetInVeh, targetVeh = targetPlayer and isInVehicle(targetPlayer)
     local myInVeh, myVeh = isInVehicle(LP)
@@ -27361,21 +27315,6 @@ local function fire(tool, targetPart, cfg, instant)
         shootOrigin = getLagCompensatedOrigin()
     end
     _G.WXRagePacket.clock[tool] = tick()
-
-    -- [穿墙发包原点]
-    -- 真实原点：用玩家自己的相机原点。服务端如果信任 hitPart，隔墙也能结算；
-    --           如果服务端自己做射线，隔墙就会被墙挡下来（打不出伤害）。
-    -- 贴身原点：把原点挪到目标身边 3.5 格，服务端射线不穿墙，但部分游戏会校验
-    --           「原点离玩家太远」直接丢包，表现就是打上去完全没伤害。
-    if Toggles.RageWallBang and Toggles.RageWallBang.Value then
-        local mode = (Options.RageWallBangMode and Options.RageWallBangMode.Value) or '真实原点（推荐）'
-        if mode == '贴身原点' then
-            local dir = targetPos - shootOrigin
-            if dir.Magnitude > 4 then
-                shootOrigin = targetPos - dir.Unit * 3.5
-            end
-        end
-    end
 
     -- [单包多发] 重复命中直接塞进同一个子弹表，一次 FireServer 全部送达。
     local t = {}
@@ -33861,6 +33800,7 @@ end)()
 
     -- 每个 HUD 元素：虚线框 + 名称 + 拖动热区
     local holders = {}
+    local editingFlag = false
     local beginDrag
 
     local function buildHolder(entry)
@@ -33877,8 +33817,10 @@ end)()
         local label = Instance.new('TextLabel')
         label.Name = 'Tag'
         label.BackgroundTransparency = 1
-        label.Size = UDim2.fromOffset(140, 14)
-        label.Position = UDim2.fromOffset(2, 2)
+        -- 用 Scale 尺寸：AutomaticSize 会忽略按比例尺寸的子元素，
+        -- 这样标签不会把「命中信息」这种自适应容器撑大（之前框比文字大一圈）
+        label.Size = UDim2.fromScale(1, 1)
+        label.Position = UDim2.fromOffset(0, 0)
         label.Font = Enum.Font.GothamBold
         label.Text = tostring(entry.name)
         label.TextSize = 11
@@ -33886,6 +33828,7 @@ end)()
         label.TextStrokeColor3 = Color3.new(0, 0, 0)
         label.TextStrokeTransparency = 0.2
         label.TextXAlignment = Enum.TextXAlignment.Left
+        label.TextYAlignment = Enum.TextYAlignment.Top
         label.ZIndex = 52
         label.Parent = holder
 
@@ -33900,6 +33843,10 @@ end)()
         local data = { entry = entry, holder = holder, handle = handle, size = Vector2.new(-1, -1) }
 
         handle.InputBegan:Connect(function(input)
+            -- 不在编辑模式时绝不响应拖动（否则退出编辑后点到 HUD 还会被拖走）
+            if not editingFlag then
+                return
+            end
             if input.UserInputType == Enum.UserInputType.MouseButton1
                 or input.UserInputType == Enum.UserInputType.Touch then
                 beginDrag(data, input)
@@ -33913,23 +33860,25 @@ end)()
     local dragging = false
     local dragData = nil
     local dragStart = Vector2.zero
-    local dragBase = Vector2.zero
-    local dragTarget = nil
-    local dragCurrent = nil
+    local dragBasePos = UDim2.new()
+    local dragOffsetTarget = Vector2.zero
+    local dragOffsetCurrent = Vector2.zero
 
     beginDrag = function(data, input)
         if not data or not data.entry or not data.entry.root then
+            return
+        end
+        if not editingFlag then
             return
         end
         local root = data.entry.root
         dragging = true
         dragData = data
         dragStart = Vector2.new(input.Position.X, input.Position.Y)
-        dragBase = Vector2.new(root.AbsolutePosition.X, root.AbsolutePosition.Y)
-        dragTarget = dragBase
-        dragCurrent = dragBase
-        root.AnchorPoint = Vector2.new(0, 0)
-        root.Position = UDim2.fromOffset(dragBase.X, dragBase.Y)
+        -- 记住原始 Position，拖动只叠加像素偏移：不动 AnchorPoint，所以不会「点一下跳一下」
+        dragBasePos = root.Position
+        dragOffsetTarget = Vector2.zero
+        dragOffsetCurrent = Vector2.zero
     end
 
     UserInputService.InputChanged:Connect(function(input)
@@ -33938,8 +33887,7 @@ end)()
         end
         if input.UserInputType == Enum.UserInputType.MouseMovement
             or input.UserInputType == Enum.UserInputType.Touch then
-            local delta = Vector2.new(input.Position.X, input.Position.Y) - dragStart
-            dragTarget = dragBase + delta
+            dragOffsetTarget = Vector2.new(input.Position.X, input.Position.Y) - dragStart
         end
     end)
 
@@ -33947,18 +33895,17 @@ end)()
         if input.UserInputType == Enum.UserInputType.MouseButton1
             or input.UserInputType == Enum.UserInputType.Touch then
             dragging = false
-            -- 松手后一小段回弹收尾，不会硬停
-            if dragData and dragTarget and dragData.entry and dragData.entry.root then
+            -- 松手后一小段缓动收尾，不会硬停
+            if dragData and dragData.entry and dragData.entry.root then
                 local root = dragData.entry.root
+                local finalPos = dragBasePos + UDim2.fromOffset(dragOffsetTarget.X, dragOffsetTarget.Y)
                 pcall(function()
                     TweenService:Create(root, TweenInfo.new(0.12, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
-                        Position = UDim2.fromOffset(dragTarget.X, dragTarget.Y),
+                        Position = finalPos,
                     }):Play()
                 end)
             end
             dragData = nil
-            dragTarget = nil
-            dragCurrent = nil
         end
     end)
 
@@ -34074,6 +34021,7 @@ end)()
             return
         end
         editing = true
+        editingFlag = true
         editorGui.Enabled = true
 
         for _, data in ipairs(holders) do
@@ -34113,6 +34061,9 @@ end)()
             return
         end
         editing = false
+        editingFlag = false
+        dragging = false
+        dragData = nil
         editorGui.Enabled = false
         _G.YZFeedForce = false
         if _G.YZFeedClear then
@@ -34162,14 +34113,14 @@ end)()
         end
 
         -- 平滑跟随：元素带一点延迟追向鼠标，松手后自然收尾
-        if dragData and dragTarget and dragCurrent and dragData.entry and dragData.entry.root then
+        if dragData and dragData.entry and dragData.entry.root then
             local root = dragData.entry.root
             local k = math.clamp(dt * 14, 0, 1)
-            dragCurrent = dragCurrent + (dragTarget - dragCurrent) * k
-            if (dragTarget - dragCurrent).Magnitude < 0.4 then
-                dragCurrent = dragTarget
+            dragOffsetCurrent = dragOffsetCurrent + (dragOffsetTarget - dragOffsetCurrent) * k
+            if (dragOffsetTarget - dragOffsetCurrent).Magnitude < 0.4 then
+                dragOffsetCurrent = dragOffsetTarget
             end
-            root.Position = UDim2.fromOffset(dragCurrent.X, dragCurrent.Y)
+            root.Position = dragBasePos + UDim2.fromOffset(dragOffsetCurrent.X, dragOffsetCurrent.Y)
         end
         for _, data in ipairs(holders) do
             local root = data.entry.root
