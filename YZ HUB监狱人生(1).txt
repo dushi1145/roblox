@@ -17,6 +17,18 @@ do
 			local old
 			pcall(function() old = host:FindFirstChild('Obsidian') end)
 			if old then pcall(function() old:Destroy() end) end
+			-- 清掉上一轮脚本留下的所有自定义 GUI（名字以 YZ / Boars 开头），
+			-- 否则重复执行会出现两套灵动岛 / 名牌，文字全叠在一起
+			pcall(function()
+				for _, child in ipairs(host:GetChildren()) do
+					if child:IsA('ScreenGui') then
+						local n = child.Name
+						if string.sub(n, 1, 2) == 'YZ' or string.sub(n, 1, 5) == 'Boars' then
+							pcall(function() child:Destroy() end)
+						end
+					end
+				end
+			end)
 		end
 	end
 end
@@ -21164,6 +21176,14 @@ Toggles.RageWallBang = Rage_Tab:AddToggle('RageWallBang', {
     Default = false,
     Tooltip = '不做视线检测，墙后目标照样锁定并直接发包；能否命中取决于服务端是否校验弹道',
 })
+Toggles.RageWallBangCheck = Rage_Tab:AddToggle('RageWallBangCheck', {
+    Text = '穿墙时可击杀检查',
+    Default = true,
+    Tooltip = '只打存活、没有出生保护、且在穿墙射程内的目标，避免一直对着打不了的人开枪',
+})
+Options.RageWallBangRange = Rage_Tab:AddSlider('RageWallBangRange', {
+    Text = '穿墙最大距离', Default = 400, Min = 50, Max = 1500, Rounding = 0, Compact = false,
+})
 Options.RageBotCarPenetration = WXDrop(Rage_Tab, 'RageBotCarPenetration', { Text = '载具穿透模式', Values = { 'Windows & Non-Solid', 'All Car Parts' }, Default = 1 })
 Toggles.RageBotDisableInVehicle = Rage_Tab:AddToggle('RageBotDisableInVehicle', { Text = '载具内禁用', Default = true })
 Rage_Tab:AddDivider()
@@ -23789,6 +23809,29 @@ end
 local function hasLineOfSight(from, to, targetPlayer)
     -- 穿墙模式：跳过所有视线 / 射线检测，墙后目标也直接返回可见
     if Toggles.RageWallBang and Toggles.RageWallBang.Value then
+        -- 可击杀检查：避免对着打不了的人（死亡 / 出生保护 / 太远 / 没角色）一直开枪
+        if Toggles.RageWallBangCheck == nil or Toggles.RageWallBangCheck.Value then
+            if targetPlayer then
+                local tchar = targetPlayer.Character
+                if not tchar or not tchar.Parent then
+                    return false
+                end
+                local thum = tchar:FindFirstChildOfClass('Humanoid')
+                if not thum or thum.Health <= 0 then
+                    return false
+                end
+                if tchar:FindFirstChildOfClass('ForceField') then
+                    return false
+                end
+                if not tchar:FindFirstChild('HumanoidRootPart') then
+                    return false
+                end
+                local maxRange = tonumber(Options.RageWallBangRange and Options.RageWallBangRange.Value) or 400
+                if (to - from).Magnitude > maxRange then
+                    return false
+                end
+            end
+        end
         return true
     end
 
@@ -36035,6 +36078,38 @@ end
     end
 
     _G.YZIslandNotice = islandNotice
+
+    -- 开关功能时推一条到灵动岛（灵动岛自己的开关不推）
+    local ignoreIsland = { [Toggles.Island] = true }
+    local pushBudget, pushWindow = 0, 0
+    for _, toggle in pairs(Toggles) do
+        if type(toggle) == 'table' and type(toggle.SetValue) == 'function'
+            and toggle.Value ~= nil and not toggle.__yzIslandHooked then
+            toggle.__yzIslandHooked = true
+            local previous = toggle.Changed
+            toggle.Changed = function(value)
+                if previous then
+                    pcall(previous, value)
+                end
+                if ignoreIsland[toggle] then
+                    return
+                end
+                if Toggles.Island and Toggles.Island.Value == false then
+                    return
+                end
+                local now = os.clock()
+                if now - pushWindow > 1 then
+                    pushWindow = now
+                    pushBudget = 0
+                end
+                if pushBudget >= 6 then
+                    return
+                end
+                pushBudget += 1
+                pcall(islandPush, toggle.Text or '模块', value and '已开启' or '已关闭', value == true)
+            end
+        end
+    end
 
     -- 把 Library 右上角的提示整体搬到灵动岛
     if not _G.YZNotifyHooked then
