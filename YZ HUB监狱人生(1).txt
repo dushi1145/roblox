@@ -21187,6 +21187,11 @@ Toggles.RageWallBangCheck = Rage_Tab:AddToggle('RageWallBangCheck', {
 Options.RageWallBangRange = Rage_Tab:AddSlider('RageWallBangRange', {
     Text = '穿墙最大距离', Default = 400, Min = 50, Max = 1500, Rounding = 0, Compact = false,
 })
+Options.RageWallBangMode = WXDrop(Rage_Tab, 'RageWallBangMode', {
+    Text = '穿墙发包原点',
+    Values = { '真实原点（推荐）', '贴身原点' },
+    Default = 1,
+})
 Options.RageBotCarPenetration = WXDrop(Rage_Tab, 'RageBotCarPenetration', { Text = '载具穿透模式', Values = { 'Windows & Non-Solid', 'All Car Parts' }, Default = 1 })
 Toggles.RageBotDisableInVehicle = Rage_Tab:AddToggle('RageBotDisableInVehicle', { Text = '载具内禁用', Default = true })
 Rage_Tab:AddDivider()
@@ -27357,12 +27362,18 @@ local function fire(tool, targetPart, cfg, instant)
     end
     _G.WXRagePacket.clock[tool] = tick()
 
-    -- [穿墙] 开启后把出包原点挪到目标身边 3.5 格：服务端从近距离直连目标，
-    -- 射线中间不再穿墙，等于「无视障碍物直接对目标发包」
+    -- [穿墙发包原点]
+    -- 真实原点：用玩家自己的相机原点。服务端如果信任 hitPart，隔墙也能结算；
+    --           如果服务端自己做射线，隔墙就会被墙挡下来（打不出伤害）。
+    -- 贴身原点：把原点挪到目标身边 3.5 格，服务端射线不穿墙，但部分游戏会校验
+    --           「原点离玩家太远」直接丢包，表现就是打上去完全没伤害。
     if Toggles.RageWallBang and Toggles.RageWallBang.Value then
-        local dir = targetPos - shootOrigin
-        if dir.Magnitude > 4 then
-            shootOrigin = targetPos - dir.Unit * 3.5
+        local mode = (Options.RageWallBangMode and Options.RageWallBangMode.Value) or '真实原点（推荐）'
+        if mode == '贴身原点' then
+            local dir = targetPos - shootOrigin
+            if dir.Magnitude > 4 then
+                shootOrigin = targetPos - dir.Unit * 3.5
+            end
         end
     end
 
@@ -30460,13 +30471,19 @@ function WXUpdateNameTag(pill, player, char, color)
     local screenPos, onScreen = cam:WorldToViewportPoint(origin)
     local dist = (cam.CFrame.Position - head.Position).Magnitude
 
-    -- 拉伸分辨率：整幅画面被纵向压扁，WorldToViewportPoint 算出来的是未压扁的坐标，
-    -- 这里按同一比例压回去，名牌才会贴在人身上而不是飘到脚下
+    -- 拉伸分辨率：画面被纵向压扁，这里按同一比例把坐标压回去。
+    -- 注意相机可能「这一帧已经被拉伸过」（拉伸模块在 Last-1 写、游戏不一定每帧重设），
+    -- 这时 WorldToViewportPoint 已经是压扁后的坐标，再压一次就会一帧偏一帧正 → 名字乱跳。
+    -- 用相机 UpVector 的长度判断相机当前是否已处于拉伸状态。
     if Toggles.StretchResolution and Toggles.StretchResolution.Value then
         local s = tonumber(Options.StretchResolutionValue and Options.StretchResolutionValue.Value) or 1
         if math.abs(s - 1) > 0.01 then
-            local midY = cam.ViewportSize.Y / 2
-            screenPos = Vector3.new(screenPos.X, midY + (screenPos.Y - midY) * s, screenPos.Z)
+            local upMag = cam.CFrame.UpVector.Magnitude
+            local alreadyStretched = math.abs(upMag - s) < 0.03
+            if not alreadyStretched then
+                local midY = cam.ViewportSize.Y / 2
+                screenPos = Vector3.new(screenPos.X, midY + (screenPos.Y - midY) * s, screenPos.Z)
+            end
         end
     end
 
@@ -36100,7 +36117,8 @@ end
     _G.YZIslandNotice = islandNotice
 
     -- 开关功能时推一条到灵动岛（灵动岛自己的开关不推）
-    local ignoreIsland = { [Toggles.Island] = true }
+    -- 注意：Toggles.Island 要到后面才创建，这里不能直接当 key 用（nil key 会报 table index is nil）
+    local ignoreIsland = {}
     local pushBudget, pushWindow = 0, 0
     for _, toggle in pairs(Toggles) do
         if type(toggle) == 'table' and type(toggle.SetValue) == 'function'
@@ -36111,7 +36129,7 @@ end
                 if previous then
                     pcall(previous, value)
                 end
-                if ignoreIsland[toggle] then
+                if ignoreIsland[toggle] or toggle == Toggles.Island then
                     return
                 end
                 if Toggles.Island and Toggles.Island.Value == false then
