@@ -19363,6 +19363,26 @@ local isAlive, getConfig, updateHudAmmo
 -- 注入动画在所有界面构建完成后再播放（见文件末尾），这里只先标记，让 HUD 暂时不显示
 _G.YZIntroActive = true
 
+-- 看门狗：不管后面哪个模块报错，8 秒后都强制把主界面打开，避免「UI 打不开 + 视角卡住」
+task.delay(8, function()
+    pcall(function()
+        if _G.YZIntroActive then
+            _G.YZIntroActive = false
+            if _G.YZIntroGui then
+                pcall(function() _G.YZIntroGui:Destroy() end)
+                _G.YZIntroGui = nil
+            end
+            if _G.YZIntroBlur then
+                pcall(function() _G.YZIntroBlur:Destroy() end)
+                _G.YZIntroBlur = nil
+            end
+        end
+        if Library and Library.Toggled == false then
+            Library:Toggle(true)
+        end
+    end)
+end)
+
 local Window = Library:CreateWindow({
     Title = 'YZ HUB',
     Icon = "https://i.postimg.cc/3N0r5RR6/Screenshot-2026-10-25-01-54-08-59-9d26c6446fd7bb8e41d99b6262b17def.jpg",
@@ -33578,6 +33598,12 @@ end
     msgLabel.Text = ''
     msgLabel.Parent = msgRoot
 
+    local msgToken = 0
+
+    local function applyMsgScale()
+        msgScale.Scale = math.clamp((tonumber(Options.PubgKillMsgScale and Options.PubgKillMsgScale.Value) or 100) / 100, 0.5, 2)
+    end
+
     -- UI 编辑时展示的示例文本
     _G.YZKillMsgDemo = function()
         applyMsgScale()
@@ -33589,12 +33615,6 @@ end
     _G.YZKillMsgClear = function()
         msgLabel.Text = ''
         msgRoot.Visible = false
-    end
-
-    local msgToken = 0
-
-    local function applyMsgScale()
-        msgScale.Scale = math.clamp((tonumber(Options.PubgKillMsgScale and Options.PubgKillMsgScale.Value) or 100) / 100, 0.5, 2)
     end
 
     local function pushKillMsg(killer, victim, weapon)
@@ -36521,9 +36541,11 @@ end
     pcall(function()
         blur.Parent = Lighting
     end)
+    _G.YZIntroBlur = blur
 
     local gui = Instance.new('ScreenGui')
     gui.Name = 'YZIntro'
+    _G.YZIntroGui = gui
     gui.ResetOnSpawn = false
     gui.IgnoreGuiInset = true
     gui.DisplayOrder = 2147483000
@@ -36682,6 +36704,12 @@ end)
 
 if not WX_OK then
 	print('[WX] 加载出错：' .. tostring(WX_ERR))
+	-- 同时落盘一份，方便把行号发给作者定位
+	pcall(function()
+		if writefile then
+			writefile('YZ_LAST_ERROR.txt', tostring(WX_ERR))
+		end
+	end)
 	pcall(function()
 		local lp = game:GetService('Players').LocalPlayer
 		local host = (lp and lp:FindFirstChild('PlayerGui')) or game:GetService('CoreGui')
