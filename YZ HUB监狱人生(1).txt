@@ -26631,9 +26631,11 @@ local function hookDamageTracker(player)
             if newHealth < prevHealth then
                 local now = tick()
                 local attackData = lastShotInfo.recentAttacks and lastShotInfo.recentAttacks[player]
+                -- 只认「我们确实打的是他」的伤害：
+                -- 之前还有一条「最近 0.65 秒开过枪就算自己打的」，会把别人造成的伤害
+                -- 也记成自己的（别人的命中也会触发击杀音效 / 伤害数字），这里去掉。
                 local isOurHit = (attackData and (now - attackData.tick) <= 1.25)
-                    or (lastShotInfo.targetPlayer == player and (now - lastShotInfo.tick) <= 1.25)
-                    or ((now - (lastShotInfo.lastAttackTick or 0)) <= 0.65)
+                    or (lastShotInfo.targetPlayer == player and (now - lastShotInfo.tick) <= 1.0)
 
                 if isOurHit then
                     if _G.WXAntiDodge then pcall(_G.WXAntiDodge.OnHit, player) end
@@ -33806,39 +33808,24 @@ end)()
     local function buildHolder(entry)
         local root = entry.root
 
+        -- 虚线框画在独立的编辑器层里（绝对坐标每帧同步），
+        -- 不能挂进元素内部：命中信息容器带 UIListLayout，会把虚线框当成一个布局项排进去，
+        -- 整列被挤到屏幕外。
         local holder = Instance.new('Frame')
         holder.Name = 'YZEditOutline'
-        holder.Size = UDim2.fromScale(1, 1)
+        holder.Size = UDim2.fromOffset(0, 0)
         holder.BackgroundTransparency = 1
         holder.ClipsDescendants = false
         holder.ZIndex = 50
-        holder.Parent = root
-
-        local label = Instance.new('TextLabel')
-        label.Name = 'Tag'
-        label.BackgroundTransparency = 1
-        -- 用 Scale 尺寸：AutomaticSize 会忽略按比例尺寸的子元素，
-        -- 这样标签不会把「命中信息」这种自适应容器撑大（之前框比文字大一圈）
-        label.Size = UDim2.fromScale(1, 1)
-        label.Position = UDim2.fromOffset(0, 0)
-        label.Font = Enum.Font.GothamBold
-        label.Text = tostring(entry.name)
-        label.TextSize = 11
-        label.TextColor3 = Color3.new(1, 1, 1)
-        label.TextStrokeColor3 = Color3.new(0, 0, 0)
-        label.TextStrokeTransparency = 0.2
-        label.TextXAlignment = Enum.TextXAlignment.Left
-        label.TextYAlignment = Enum.TextYAlignment.Top
-        label.ZIndex = 52
-        label.Parent = holder
+        holder.Parent = editorGui
 
         local handle = Instance.new('TextButton')
         handle.Name = 'YZEditHandle'
-        handle.Size = UDim2.fromScale(1, 1)
+        handle.Size = UDim2.fromOffset(0, 0)
         handle.BackgroundTransparency = 1
         handle.Text = ''
         handle.ZIndex = 60
-        handle.Parent = root
+        handle.Parent = editorGui
 
         local data = { entry = entry, holder = holder, handle = handle, size = Vector2.new(-1, -1) }
 
@@ -34125,12 +34112,17 @@ end)()
         for _, data in ipairs(holders) do
             local root = data.entry.root
             if root and data.holder and data.holder.Parent then
-                local us = root:FindFirstChildOfClass('UIScale')
-                local sc = (us and us.Scale) or 1
-                local size = root.AbsoluteSize / math.max(sc, 0.01)
+                local pos = root.AbsolutePosition
+                local size = root.AbsoluteSize
+                data.holder.Position = UDim2.fromOffset(pos.X, pos.Y)
+                data.holder.Size = UDim2.fromOffset(size.X, size.Y)
+                if data.handle then
+                    data.handle.Position = UDim2.fromOffset(pos.X, pos.Y)
+                    data.handle.Size = UDim2.fromOffset(size.X, size.Y)
+                end
                 if math.abs(size.X - data.size.X) > 1 or math.abs(size.Y - data.size.Y) > 1 then
                     data.size = size
-                    makeDashed(data.holder, size.X, size.Y, 1 / math.max(sc, 0.01))
+                    makeDashed(data.holder, size.X, size.Y, 1)
                 end
             end
         end
