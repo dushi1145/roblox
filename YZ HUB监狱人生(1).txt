@@ -21159,6 +21159,11 @@ Toggles.RageBotAutoEquip = Rage_Tab:AddToggle('RageBotAutoEquip', { Text = '自�
 Toggles.RageBotAutoWeapon = Rage_Tab:AddToggle('RageBotAutoWeapon', { Text = '自动拾取武器', Default = false })
 Rage_Tab:AddDivider()
 Toggles.RageBotShootThroughCars = Rage_Tab:AddToggle('RageBotShootThroughCars', { Text = '穿车射击', Default = true })
+Toggles.RageWallBang = Rage_Tab:AddToggle('RageWallBang', {
+    Text = '穿墙射击（无视障碍）',
+    Default = false,
+    Tooltip = '不做视线检测，墙后目标照样锁定并直接发包；能否命中取决于服务端是否校验弹道',
+})
 Options.RageBotCarPenetration = WXDrop(Rage_Tab, 'RageBotCarPenetration', { Text = '载具穿透模式', Values = { 'Windows & Non-Solid', 'All Car Parts' }, Default = 1 })
 Toggles.RageBotDisableInVehicle = Rage_Tab:AddToggle('RageBotDisableInVehicle', { Text = '载具内禁用', Default = true })
 Rage_Tab:AddDivider()
@@ -23782,6 +23787,11 @@ local function getLagCompensatedOrigin()
 end
 
 local function hasLineOfSight(from, to, targetPlayer)
+    -- 穿墙模式：跳过所有视线 / 射线检测，墙后目标也直接返回可见
+    if Toggles.RageWallBang and Toggles.RageWallBang.Value then
+        return true
+    end
+
     local targetChar = targetPlayer and targetPlayer.Character
     local targetInVeh, targetVeh = targetPlayer and isInVehicle(targetPlayer)
     local myInVeh, myVeh = isInVehicle(LP)
@@ -27300,6 +27310,15 @@ local function fire(tool, targetPart, cfg, instant)
         shootOrigin = getLagCompensatedOrigin()
     end
     _G.WXRagePacket.clock[tool] = tick()
+
+    -- [穿墙] 开启后把出包原点挪到目标身边 3.5 格：服务端从近距离直连目标，
+    -- 射线中间不再穿墙，等于「无视障碍物直接对目标发包」
+    if Toggles.RageWallBang and Toggles.RageWallBang.Value then
+        local dir = targetPos - shootOrigin
+        if dir.Magnitude > 4 then
+            shootOrigin = targetPos - dir.Unit * 3.5
+        end
+    end
 
     -- [单包多发] 重复命中直接塞进同一个子弹表，一次 FireServer 全部送达。
     local t = {}
@@ -35706,7 +35725,80 @@ end
         table.clear(rowObjects)
     end
 
+    -- 通知行（检测到脚本 / 配置加载等）：左侧图标 + 文本，没有开关
+    local function buildNoticeRow(index, item)
+        local row = Instance.new('Frame')
+        row.Size = UDim2.new(1, -20, 0, 22)
+        row.Position = UDim2.fromOffset(10, 10 + (index - 1) * 26)
+        row.BackgroundTransparency = 1
+        row.ZIndex = 5
+        row.Parent = body
+
+        local kind = item.kind or 'info'
+        local color = Color3.fromRGB(128, 92, 255)
+        if kind == 'detect' then
+            color = Color3.fromRGB(220, 60, 68)
+        elseif kind == 'error' then
+            color = Color3.fromRGB(226, 120, 62)
+        elseif kind == 'success' then
+            color = Color3.fromRGB(48, 176, 88)
+        end
+
+        local badge = Instance.new('Frame')
+        badge.Size = UDim2.fromOffset(16, 16)
+        badge.Position = UDim2.fromOffset(0, 3)
+        badge.BackgroundColor3 = color
+        badge.BorderSizePixel = 0
+        addCorner(badge, 5)
+        badge.Parent = row
+
+        if kind == 'success' then
+            -- 对勾用两根小横条画
+            local g = Instance.new('Frame')
+            g.Size = UDim2.fromScale(1, 1)
+            g.BackgroundTransparency = 1
+            g.Parent = badge
+            local b1 = Instance.new('Frame')
+            b1.AnchorPoint = Vector2.new(0.5, 0.5)
+            b1.Position = UDim2.fromOffset(6.3, 8.7)
+            b1.Size = UDim2.fromOffset(5.4, 1.9)
+            b1.Rotation = 45
+            b1.BackgroundColor3 = Color3.new(1, 1, 1)
+            b1.BorderSizePixel = 0
+            b1.Parent = g
+            local b2 = Instance.new('Frame')
+            b2.AnchorPoint = Vector2.new(0.5, 0.5)
+            b2.Position = UDim2.fromOffset(9.9, 7.3)
+            b2.Size = UDim2.fromOffset(8.0, 1.9)
+            b2.Rotation = -45
+            b2.BackgroundColor3 = Color3.new(1, 1, 1)
+            b2.BorderSizePixel = 0
+            b2.Parent = g
+        else
+            local icon = Instance.new('TextLabel')
+            icon.Size = UDim2.fromScale(1, 1)
+            icon.BackgroundTransparency = 1
+            icon.Font = Enum.Font.GothamBold
+            icon.Text = (kind == 'info') and 'i' or '!'
+            icon.TextSize = 12
+            icon.TextColor3 = Color3.new(1, 1, 1)
+            icon.Parent = badge
+        end
+
+        mkLabel(row, {
+            Text = tostring(item.title or ''),
+            Position = UDim2.fromOffset(24, 0),
+            Size = UDim2.new(1, -24, 1, 0),
+            TextSize = 12,
+            TextColor3 = Color3.fromRGB(232, 235, 243),
+            TextTruncate = Enum.TextTruncate.AtEnd,
+        })
+    end
+
     local function buildIslandRow(index, item)
+        if item.kind then
+            return buildNoticeRow(index, item)
+        end
         local row = Instance.new('Frame')
         row.Size = UDim2.new(1, -20, 0, 22)
         row.Position = UDim2.fromOffset(10, 10 + (index - 1) * 26)
@@ -35884,6 +35976,70 @@ end
     end
 
     _G.YZIslandPush = islandPush
+
+    -- 通知（检测到脚本 / 配置加载、覆盖、删除…）也走灵动岛
+    local function islandNotice(text, duration)
+        if Toggles.Island and Toggles.Island.Value == false then
+            return
+        end
+        text = tostring(text or '')
+        if text == '' then
+            return
+        end
+
+        local kind = 'info'
+        if string.find(text, '检测到脚本', 1, true) then
+            kind = 'detect'
+        elseif string.find(text, '失败', 1, true) or string.find(text, '错误', 1, true)
+            or string.find(text, '不可用', 1, true) or string.find(text, '未就绪', 1, true) then
+            kind = 'error'
+        elseif string.find(text, '已', 1, true) and not string.find(text, '已关闭', 1, true) then
+            kind = 'success'
+        end
+
+        table.insert(history, 1, { title = text, kind = kind })
+        while #history > 3 do
+            table.remove(history)
+        end
+
+        clearIslandRows()
+        for i, item in ipairs(history) do
+            buildIslandRow(i, item)
+        end
+
+        islandExpand()
+
+        islandToken += 1
+        local token = islandToken
+        local hold = tonumber(Options.IslandNoticeHold and Options.IslandNoticeHold.Value)
+            or tonumber(duration)
+            or tonumber(Options.IslandHold and Options.IslandHold.Value)
+            or 4
+        task.delay(math.clamp(hold, 1, 12), function()
+            if token == islandToken then
+                islandCollapse()
+            end
+        end)
+    end
+
+    _G.YZIslandNotice = islandNotice
+
+    -- 把 Library 右上角的提示整体搬到灵动岛
+    if not _G.YZNotifyHooked then
+        _G.YZNotifyHooked = true
+        local originalNotify = Library.Notify
+        Library.Notify = function(self, message, duration, ...)
+            if _G.YZIslandNotice then
+                local ok = pcall(_G.YZIslandNotice, message, duration)
+                if ok then
+                    return
+                end
+            end
+            if originalNotify then
+                return originalNotify(self, message, duration, ...)
+            end
+        end
+    end
 
     -- 迷你岛常驻显示 FPS / 延迟
     task.spawn(function()
@@ -36189,6 +36345,10 @@ end
     })
     Options.IslandHold = islandGroup:AddSlider('IslandHold', {
         Text = '停留时长（秒）', Default = 2.4, Min = 0.6, Max = 8, Rounding = 1, Compact = false,
+    })
+    Options.IslandNoticeHold = islandGroup:AddSlider('IslandNoticeHold', {
+        Text = '提示显示时间（秒）', Default = 4, Min = 1, Max = 10, Rounding = 1, Compact = false,
+        Tooltip = '检测到脚本、配置加载/覆盖/删除等提示在灵动岛上停留多久',
     })
     islandGroup:AddButton({
         Text = '测试灵动岛',
