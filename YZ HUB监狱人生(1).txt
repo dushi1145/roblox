@@ -32470,6 +32470,142 @@ if isfile(SaveManager.Folder .. '/settings/autoload.txt') then
     SaveManager.AutoloadLabel:SetText('自动加载：' .. name)
 end
 
+-- ====================== 配置导出 / 导入（纯字符串，可复制粘贴） ======================
+ConfigBox:AddDivider()
+
+local CfgHttp = game:GetService('HttpService')
+
+local function encodeCfgValue(v)
+    local tv = typeof(v)
+    if tv == 'Color3' then
+        return string.format('#%02X%02X%02X',
+            math.floor(v.R * 255 + 0.5), math.floor(v.G * 255 + 0.5), math.floor(v.B * 255 + 0.5))
+    elseif tv == 'table' then
+        local arr = {}
+        for i, x in ipairs(v) do
+            arr[i] = tostring(x)
+        end
+        return arr
+    elseif tv == 'number' or tv == 'string' or tv == 'boolean' then
+        return v
+    end
+    return nil
+end
+
+local function decodeCfgValue(v)
+    if type(v) == 'string' and #v == 7 and string.sub(v, 1, 1) == '#' then
+        local r = tonumber(string.sub(v, 2, 3), 16) or 255
+        local g = tonumber(string.sub(v, 4, 5), 16) or 255
+        local b = tonumber(string.sub(v, 6, 7), 16) or 255
+        return Color3.fromRGB(r, g, b)
+    elseif type(v) == 'table' then
+        local arr = {}
+        for i, x in ipairs(v) do
+            arr[i] = tostring(x)
+        end
+        return arr
+    end
+    return v
+end
+
+local function collectCfg()
+    local data = { v = 1, o = {}, t = {} }
+    for k, obj in pairs(Options) do
+        if type(obj) == 'table' and obj.Value ~= nil and type(obj.SetValue) == 'function' then
+            local enc = encodeCfgValue(obj.Value)
+            if enc ~= nil then
+                data.o[k] = enc
+            end
+        end
+    end
+    for k, obj in pairs(Toggles) do
+        if type(obj) == 'table' and obj.Value ~= nil and type(obj.SetValue) == 'function' then
+            local enc = encodeCfgValue(obj.Value)
+            if enc ~= nil then
+                data.t[k] = enc
+            end
+        end
+    end
+    return data
+end
+
+local function buildCfgString()
+    local ok, str = pcall(function()
+        return CfgHttp:JSONEncode(collectCfg())
+    end)
+    if ok and type(str) == 'string' then
+        return str
+    end
+    return nil
+end
+
+local function applyCfgString(str)
+    if type(str) ~= 'string' or str == '' then
+        return false, '空字符串'
+    end
+    local ok, data = pcall(function()
+        return CfgHttp:JSONDecode(str)
+    end)
+    if not ok or type(data) ~= 'table' then
+        return false, '格式错误'
+    end
+
+    local applied = 0
+    for _, tgt in ipairs({ { data.o or {}, Options }, { data.t or {}, Toggles } }) do
+        for k, v in pairs(tgt[1]) do
+            local obj = tgt[2][k]
+            if obj and type(obj.SetValue) == 'function' then
+                local ok2 = pcall(function()
+                    obj:SetValue(decodeCfgValue(v))
+                end)
+                if ok2 then
+                    applied += 1
+                end
+            end
+        end
+    end
+    return true, applied
+end
+
+ConfigBox:AddButton('导出配置到剪贴板', function()
+    local str = buildCfgString()
+    if not str then
+        return Library:Notify('导出失败', 3)
+    end
+    if Options.CfgImportString then
+        pcall(function()
+            Options.CfgImportString:SetValue(str)
+        end)
+    end
+    local ok = pcall(function()
+        setclipboard(str)
+    end)
+    Library:Notify(ok and ('已复制配置（' .. #str .. ' 字符）到剪贴板，也可从下方输入框全选复制')
+        or '剪贴板不可用，请从下方输入框手动复制', 5)
+end)
+
+ConfigBox:AddButton('从剪贴板导入配置', function()
+    local ok, str = pcall(function()
+        return getclipboard()
+    end)
+    if not ok or type(str) ~= 'string' or str == '' then
+        return Library:Notify('剪贴板里没有可导入的配置', 3)
+    end
+    local ok2, info = applyCfgString(str)
+    Library:Notify(ok2 and ('已导入 ' .. tostring(info) .. ' 项设置') or ('导入失败：' .. tostring(info)), 4)
+end)
+
+ConfigBox:AddInput('CfgImportString', {
+    Text = '配置字符串（导出结果 / 粘贴这里）',
+    Placeholder = '把配置字符串粘贴到这里，再点下面「从字符串导入」',
+})
+
+ConfigBox:AddButton('从字符串导入', function()
+    local str = Options.CfgImportString and Options.CfgImportString.Value
+    local ok2, info = applyCfgString(str)
+    Library:Notify(ok2 and ('已导入 ' .. tostring(info) .. ' 项设置') or ('导入失败：' .. tostring(info)), 4)
+end)
+
 SaveManager:SetIgnoreIndexes({ 'SaveManager_ConfigList', 'SaveManager_ConfigName' })
 
 ThemeManager:ApplyToTab(Tabs['UI Settings'])
