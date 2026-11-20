@@ -34662,7 +34662,7 @@ end)()
             if part:IsA('BasePart')
                 and part.Anchored
                 and part.Transparency < 0.95
-                and part.Size.Magnitude > 4 then
+                and part.Size.Magnitude > 8 then
                 local model = part:FindFirstAncestorOfClass('Model') or part
                 local dist = (part.Position - root.Position).Magnitude
                 local item = candidates[model]
@@ -34715,10 +34715,19 @@ end)()
         end
     end
 
+    -- 自适应节流：掩体多的时候自动放慢刷新，避免每帧重建大量 Highlight 导致 UI 卡死
+    local refreshInterval = 0.5
     task.spawn(function()
         while true do
-            task.wait(0.35)
+            task.wait(refreshInterval)
+            local t0 = os.clock()
             pcall(refresh)
+            local cost = os.clock() - t0
+            if cost > 0.06 then
+                refreshInterval = math.min(2.0, refreshInterval + 0.25)
+            else
+                refreshInterval = math.max(0.5, refreshInterval - 0.05)
+            end
         end
     end)
 
