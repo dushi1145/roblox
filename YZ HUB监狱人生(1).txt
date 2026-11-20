@@ -34152,6 +34152,48 @@ end)()
         exitEditor()
     end)
 
+    -- 直接按坐标命中检测来开始拖动：
+    -- 不依赖「透明按钮能不能点到」（有些元素的 CanvasGroup / Active 会吃掉点击），
+    -- 编辑模式下点到哪个元素的矩形里就拖哪个。
+    UserInputService.InputBegan:Connect(function(input)
+        if not editingFlag then
+            return
+        end
+        if input.UserInputType ~= Enum.UserInputType.MouseButton1
+            and input.UserInputType ~= Enum.UserInputType.Touch then
+            return
+        end
+
+        local px, py = input.Position.X, input.Position.Y
+
+        -- 点到底部「拖动调整位置 / 完成」条上就不拖
+        local bp = bar.AbsolutePosition
+        local bs = bar.AbsoluteSize
+        if px >= bp.X and px <= bp.X + bs.X and py >= bp.Y and py <= bp.Y + bs.Y then
+            return
+        end
+
+        local best, bestArea = nil, math.huge
+        for _, data in ipairs(holders) do
+            local root = data.entry.root
+            if root then
+                local ap = root.AbsolutePosition
+                local as = root.AbsoluteSize
+                if px >= ap.X and px <= ap.X + as.X and py >= ap.Y and py <= ap.Y + as.Y then
+                    local area = math.max(1, as.X * as.Y)
+                    if area < bestArea then
+                        bestArea = area
+                        best = data
+                    end
+                end
+            end
+        end
+
+        if best then
+            beginDrag(best, input)
+        end
+    end)
+
     _G.YZOpenHudEditor = function()
         pcall(enterEditor)
     end
