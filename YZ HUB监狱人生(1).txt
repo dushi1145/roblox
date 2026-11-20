@@ -21195,7 +21195,7 @@ Options.AntiDodgeHoldMode = WXDrop(AntiDodgeDep, 'AntiDodgeHoldMode', {
 Toggles.AntiDodgeDetect = AntiDodgeDep:AddToggle('AntiDodgeDetect', {
     Text = '自动标记躲避脚本',
     Default = true,
-    Tooltip = '空枪 + 受击瞬间侧移/瞬移判定为自动躲避，标记后同步到「优先攻击脚本」和 ESP 的 [开了] 标记'
+    Tooltip = '空枪 + 受击瞬间侧移/瞬移判定为自动躲避，标记后同步到「优先攻击脚本」和 ESP 的 [hacker] 标记'
 })
 Toggles.AntiDodgeLead = AntiDodgeDep:AddToggle('AntiDodgeLead', {
     Text = '对躲避开提前量',
@@ -30489,7 +30489,7 @@ function WXUpdateNameTag(pill, player, char, color)
     end
 
     if nameLabel then
-        local prefix = isCheater and '[开了] ' or ''
+        local prefix = isCheater and '[hacker] ' or ''
         nameLabel.Text = prefix .. tostring(player.DisplayName or player.Name)
         nameLabel.TextColor3 = isCheater and Color3.fromRGB(255, 236, 236) or Color3.new(1, 1, 1)
     end
@@ -34164,12 +34164,30 @@ end)()
             return
         end
 
-        local px, py = input.Position.X, input.Position.Y
+        local px = input.Position.X
+        local rawY = input.Position.Y
+
+        -- input.Position 是「视口坐标」（不含顶部导航栏），而 HUD 的 AbsolutePosition 是
+        -- 整屏坐标（IgnoreGuiInset = true）。两个都试一遍，避免整体差一个导航栏高度导致点不到。
+        local insetY = getInsetY()
+        local ys = { rawY, rawY + insetY }
+
+        local function hits(ax, ay, aw, ah)
+            if px < ax or px > ax + aw then
+                return false
+            end
+            for _, yy in ipairs(ys) do
+                if yy >= ay and yy <= ay + ah then
+                    return true
+                end
+            end
+            return false
+        end
 
         -- 点到底部「拖动调整位置 / 完成」条上就不拖
         local bp = bar.AbsolutePosition
         local bs = bar.AbsoluteSize
-        if px >= bp.X and px <= bp.X + bs.X and py >= bp.Y and py <= bp.Y + bs.Y then
+        if hits(bp.X, bp.Y, bs.X, bs.Y) then
             return
         end
 
@@ -34179,8 +34197,14 @@ end)()
             if root then
                 local ap = root.AbsolutePosition
                 local as = root.AbsoluteSize
-                if px >= ap.X and px <= ap.X + as.X and py >= ap.Y and py <= ap.Y + as.Y then
-                    local area = math.max(1, as.X * as.Y)
+                -- 空内容的自适应元素（如还没命中过的命中信息）尺寸为 0，
+                -- 给一个最小可点区域，否则永远点不到。
+                local w, h = as.X, as.Y
+                if w < 40 or h < 12 then
+                    w, h = 260, 40
+                end
+                if hits(ap.X, ap.Y, w, h) then
+                    local area = math.max(1, w * h)
                     if area < bestArea then
                         bestArea = area
                         best = data
