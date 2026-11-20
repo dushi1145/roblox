@@ -19389,6 +19389,9 @@ task.delay(8, function()
                 _G.YZIntroBlur = nil
             end
         end
+        if _G.YZApplyHudSettings then
+            pcall(_G.YZApplyHudSettings)
+        end
         if Library and Library.Toggled == false then
             Library:Toggle(true)
         end
@@ -33798,7 +33801,9 @@ end)()
 
     local DASH, GAP, TH = 7, 6, 1.5
 
-    local function makeDashed(holder, w, h)
+    local function makeDashed(holder, w, h, k)
+        k = k or 1
+        local dash, gap, th = DASH * k, GAP * k, TH * k
         for _, c in ipairs(holder:GetChildren()) do
             if c:IsA('Frame') then
                 c:Destroy()
@@ -33819,20 +33824,20 @@ end)()
             cc.Parent = f
         end
 
-        for _, y in ipairs({ 0, math.max(0, h - TH) }) do
+        for _, y in ipairs({ 0, math.max(0, h - th) }) do
             local x = 0
             while x < w do
-                local len = math.min(DASH, w - x)
-                addDash(x, y, len, TH)
-                x = x + DASH + GAP
+                local len = math.min(dash, w - x)
+                addDash(x, y, len, th)
+                x = x + dash + gap
             end
         end
-        for _, x in ipairs({ 0, math.max(0, w - TH) }) do
-            local y = TH
-            while y < h - TH do
-                local len = math.min(DASH, (h - TH) - y)
-                addDash(x, y, TH, len)
-                y = y + DASH + GAP
+        for _, x in ipairs({ 0, math.max(0, w - th) }) do
+            local y = th
+            while y < h - th do
+                local len = math.min(dash, (h - th) - y)
+                addDash(x, y, th, len)
+                y = y + dash + gap
             end
         end
     end
@@ -33842,17 +33847,21 @@ end)()
     local beginDrag
 
     local function buildHolder(entry)
+        local root = entry.root
+
         local holder = Instance.new('Frame')
-        holder.Name = 'Holder_' .. tostring(entry.name)
+        holder.Name = 'YZEditOutline'
+        holder.Size = UDim2.fromScale(1, 1)
         holder.BackgroundTransparency = 1
-        holder.ZIndex = 1
-        holder.Parent = editorGui
+        holder.ClipsDescendants = false
+        holder.ZIndex = 50
+        holder.Parent = root
 
         local label = Instance.new('TextLabel')
         label.Name = 'Tag'
         label.BackgroundTransparency = 1
-        label.Size = UDim2.fromOffset(120, 14)
-        label.Position = UDim2.fromOffset(2, -16)
+        label.Size = UDim2.fromOffset(140, 14)
+        label.Position = UDim2.fromOffset(2, 2)
         label.Font = Enum.Font.GothamBold
         label.Text = tostring(entry.name)
         label.TextSize = 11
@@ -33860,18 +33869,18 @@ end)()
         label.TextStrokeColor3 = Color3.new(0, 0, 0)
         label.TextStrokeTransparency = 0.2
         label.TextXAlignment = Enum.TextXAlignment.Left
-        label.ZIndex = 3
+        label.ZIndex = 52
         label.Parent = holder
 
         local handle = Instance.new('TextButton')
-        handle.Name = 'Handle'
+        handle.Name = 'YZEditHandle'
         handle.Size = UDim2.fromScale(1, 1)
         handle.BackgroundTransparency = 1
         handle.Text = ''
-        handle.ZIndex = 4
-        handle.Parent = holder
+        handle.ZIndex = 60
+        handle.Parent = root
 
-        local data = { entry = entry, holder = holder, size = Vector2.new(-1, -1) }
+        local data = { entry = entry, holder = holder, handle = handle, size = Vector2.new(-1, -1) }
 
         handle.InputBegan:Connect(function(input)
             if input.UserInputType == Enum.UserInputType.MouseButton1
@@ -34051,8 +34060,11 @@ end)()
         editorGui.Enabled = true
 
         for _, data in ipairs(holders) do
+            if data.handle then
+                pcall(function() data.handle:Destroy() end)
+            end
             if data.holder then
-                data.holder:Destroy()
+                pcall(function() data.holder:Destroy() end)
             end
         end
         holders = {}
@@ -34092,6 +34104,15 @@ end)()
         if _G.YZKillMsgClear then
             pcall(_G.YZKillMsgClear)
         end
+        for _, data in ipairs(holders) do
+            if data.handle then
+                pcall(function() data.handle:Destroy() end)
+            end
+            if data.holder then
+                pcall(function() data.holder:Destroy() end)
+            end
+        end
+        holders = {}
         for _, entry in ipairs(entries) do
             if entry.root and entry.wasVisible ~= nil then
                 entry.root.Visible = entry.wasVisible
@@ -34135,14 +34156,13 @@ end)()
         end
         for _, data in ipairs(holders) do
             local root = data.entry.root
-            if root and data.holder then
-                local pos = root.AbsolutePosition
-                local size = root.AbsoluteSize
-                data.holder.Position = UDim2.fromOffset(pos.X, pos.Y)
-                data.holder.Size = UDim2.fromOffset(size.X, size.Y)
+            if root and data.holder and data.holder.Parent then
+                local us = root:FindFirstChildOfClass('UIScale')
+                local sc = (us and us.Scale) or 1
+                local size = root.AbsoluteSize / math.max(sc, 0.01)
                 if math.abs(size.X - data.size.X) > 1 or math.abs(size.Y - data.size.Y) > 1 then
-                    data.size = Vector2.new(size.X, size.Y)
-                    makeDashed(data.holder, size.X, size.Y)
+                    data.size = size
+                    makeDashed(data.holder, size.X, size.Y, 1 / math.max(sc, 0.01))
                 end
             end
         end
