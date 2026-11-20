@@ -32509,7 +32509,7 @@ local function decodeCfgValue(v)
 end
 
 local function collectCfg()
-    local data = { v = 1, o = {}, t = {} }
+    local data = { v = 1, o = {}, t = {}, k = {}, hud = nil }
     for k, obj in pairs(Options) do
         if type(obj) == 'table' and obj.Value ~= nil and type(obj.SetValue) == 'function' then
             local enc = encodeCfgValue(obj.Value)
@@ -32526,6 +32526,22 @@ local function collectCfg()
             end
         end
     end
+
+    -- 按键绑定（KeyPicker 的值不一定是 SetValue 能取到的，单独存一份）
+    for k, obj in pairs(Options) do
+        if type(obj) == 'table' and obj.Type == 'KeyPicker' and obj.Value ~= nil then
+            data.k[k] = tostring(obj.Value)
+        end
+    end
+
+    -- HUD 位置（目标信息 / 命中信息 / 击杀消息）
+    if _G.YZGetHudLayout then
+        local ok, layout = pcall(_G.YZGetHudLayout)
+        if ok and type(layout) == 'table' then
+            data.hud = layout
+        end
+    end
+
     return data
 end
 
@@ -32564,6 +32580,56 @@ local function applyCfgString(str)
             end
         end
     end
+
+    -- 按键绑定
+    if type(data.k) == 'table' then
+        for k, v in pairs(data.k) do
+            local obj = Options[k]
+            if obj then
+                local ok2 = pcall(function()
+                    if type(obj.SetValue) == 'function' then
+                        obj:SetValue(tostring(v))
+                    else
+                        obj.Value = tostring(v)
+                    end
+                    if type(obj.Update) == 'function' then
+                        obj:Update()
+                    end
+                end)
+                if ok2 then
+                    applied += 1
+                end
+            end
+        end
+    end
+
+    -- HUD 位置（导入后夹进屏幕，换分辨率也不会跑出去）
+    if type(data.hud) == 'table' and _G.YZApplyHudLayout then
+        pcall(_G.YZApplyHudLayout, data.hud)
+        applied += 1
+    end
+
+    -- 导入会重设界面相关的值，这里把背景图和 HUD 设置重新应用一遍，
+    -- 否则会出现「导入后背景图消失，要重新开关一下才恢复」
+    task.defer(function()
+        if _G.YZHUB_ReloadBackground then
+            pcall(_G.YZHUB_ReloadBackground)
+        end
+        if _G.YZApplyHudSettings then
+            pcall(_G.YZApplyHudSettings)
+        end
+        if _G.YZClampHudLayout then
+            pcall(_G.YZClampHudLayout)
+        end
+        -- 背景图不透明度重新按当前值刷一次
+        pcall(function()
+            local op = Options.BgOpacity and Options.BgOpacity.Value
+            if op ~= nil and Library and Library.BackgroundImageLabel then
+                Library.BackgroundImageLabel.ImageTransparency = 1 - ((tonumber(op) or 85) / 100)
+            end
+        end)
+    end)
+
     return true, applied
 end
 
@@ -33630,6 +33696,16 @@ do
             end
 
             entryData.label.Text = text
+
+            -- 手机 / 小窗口：一行太长会超出屏幕，这里按屏幕宽度截断
+            local vp = (workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize) or Vector2.new(1920, 1080)
+            local maxW = math.max(180, vp.X - 40)
+            if entryData.label.AbsoluteSize.X > maxW then
+                entryData.label.AutomaticSize = Enum.AutomaticSize.Y
+                entryData.label.Size = UDim2.fromOffset(maxW, 18)
+                entryData.label.TextTruncate = Enum.TextTruncate.AtEnd
+                entryData.label.TextWrapped = false
+            end
         end
 
         entryData.render()
@@ -34422,7 +34498,83 @@ end)()
         end
     end)
 
+    -- ===== 屏幕适配：把所有 HUD 元素夹进可视区域（手机 / 小窗口不会跑出屏幕） =====
+    local function clampAll()
+        local cam = workspace.CurrentCamera
+        local vp = (cam and cam.ViewportSize) or Vector2.new(1920, 1080)
+        for _, entry in ipairs(entries) do
+            local root = entry.root
+            if root then
+                local ap = root.AbsolutePosition
+                local as = root.AbsoluteSize
+                local maxX = math.max(4, vp.X - as.X - 6)
+                local maxY = math.max(4, vp.Y - as.Y - 6)
+                local nx = math.clamp(ap.X, 4, maxX)
+                local ny = math.clamp(ap.Y, 4, maxY)
+                if math.abs(nx - ap.X) > 1 or math.abs(ny - ap.Y) > 1 then
+                    root.AnchorPoint = Vector2.new(0, 0)
+                    root.Position = UDim2.fromOffset(nx, ny)
+                end
+            end
+        end
+    end
+
+    _G.YZClampHudLayout = function()
+        pcall(clampAll)
+    end
+
+    _G.YZGetHudLayout = function()
+        local out = {}
+        for _, entry in ipairs(entries) do
+            local root = entry.root
+            if root and entry.name then
+                local ap = root.AbsolutePosition
+                out[entry.name] = {
+                    x = math.floor(ap.X),
+                    y = math.floor(ap.Y),
+                    ax = root.AnchorPoint.X,
+                    ay = root.AnchorPoint.Y,
+                }
+            end
+        end
+        return out
+    end
+
+    _G.YZApplyHudLayout = function(layout)
+        if type(layout) ~= 'table' then
+            return
+        end
+        for _, entry in ipairs(entries) do
+            local root = entry.root
+            local item = layout[entry.name]
+            if root and type(item) == 'table' then
+                local ax = tonumber(item.ax) or 0
+                local ay = tonumber(item.ay) or 0
+                root.AnchorPoint = Vector2.new(ax, ay)
+                root.Position = UDim2.fromOffset(tonumber(item.x) or 12, tonumber(item.y) or 92)
+            end
+        end
+        pcall(clampAll)
+    end
+
+    -- 启动时、窗口尺寸变化时都夹一次
+    task.delay(1.5, function()
+        pcall(clampAll)
+    end)
+    pcall(function()
+        local cam = workspace.CurrentCamera
+        if cam then
+            cam:GetPropertyChangedSignal('ViewportSize'):Connect(function()
+                task.wait(0.1)
+                pcall(clampAll)
+            end)
+        end
+    end)
+
     loadLayout()
+    task.delay(1.6, function()
+        pcall(clampAll)
+    end)
 end)()
 
 -- ====================== 掩体描边（范围内墙体 / 掩体高亮描边） ======================
