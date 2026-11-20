@@ -30414,6 +30414,16 @@ function WXUpdateNameTag(pill, player, char, color)
     local screenPos, onScreen = cam:WorldToViewportPoint(origin)
     local dist = (cam.CFrame.Position - head.Position).Magnitude
 
+    -- 拉伸分辨率：整幅画面被纵向压扁，WorldToViewportPoint 算出来的是未压扁的坐标，
+    -- 这里按同一比例压回去，名牌才会贴在人身上而不是飘到脚下
+    if Toggles.StretchResolution and Toggles.StretchResolution.Value then
+        local s = tonumber(Options.StretchResolutionValue and Options.StretchResolutionValue.Value) or 1
+        if math.abs(s - 1) > 0.01 then
+            local midY = cam.ViewportSize.Y / 2
+            screenPos = Vector3.new(screenPos.X, midY + (screenPos.Y - midY) * s, screenPos.Z)
+        end
+    end
+
     if not onScreen or dist > 600 then
         pill.Visible = false
         return
@@ -35793,6 +35803,8 @@ end
             TextColor3 = Color3.fromRGB(232, 235, 243),
             TextTruncate = Enum.TextTruncate.AtEnd,
         })
+
+        table.insert(rowObjects, row)
     end
 
     local function buildIslandRow(index, item)
