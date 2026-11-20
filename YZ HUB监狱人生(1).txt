@@ -22234,10 +22234,11 @@ Toggles.KillfeedShowHits = KillfeedDep:AddToggle('KillfeedShowHits', {
     Tooltip = '命中敌人（未击杀）时也推送一条播报，显示本次伤害'
 })
 
-Toggles.KillfeedMergeHits = KillfeedDep:AddToggle('KillfeedMergeHits', {
-    Text = '连击合并',
-    Default = false,
-    Tooltip = '连续命中同一目标时合并成一条播报并累加伤害，避免刷屏'
+Options.FeedTextSize = KillfeedDep:AddSlider('FeedTextSize', {
+    Text = '命中信息字号', Default = 14, Min = 9, Max = 26, Rounding = 0, Compact = false
+})
+Options.FeedLineGap = KillfeedDep:AddSlider('FeedLineGap', {
+    Text = '命中信息行距', Default = 1, Min = 0, Max = 14, Rounding = 0, Compact = false
 })
 
 KillfeedDep:AddDivider()
@@ -22304,6 +22305,33 @@ Options.PubgKillMsgScale = KillMsgGroup:AddSlider('PubgKillMsgScale', {
 Options.PubgKillMsgDuration = KillMsgGroup:AddSlider('PubgKillMsgDuration', {
     Text = '停留时长（秒）', Default = 3, Min = 1, Max = 8, Rounding = 1, Compact = false
 })
+
+-- 掩体描边（范围内墙体 / 掩体高亮描边，暗地图也能看清地形）
+local CoverGroup = Tabs.Visuals:AddLeftGroupbox('掩体描边')
+
+Toggles.CoverOutline = CoverGroup:AddToggle('CoverOutline', {
+    Text = '启用掩体描边',
+    Default = false,
+    Tooltip = '把周围一定范围内的墙体 / 掩体描边（透视显示），暗处也能看清地形',
+})
+Options.CoverOutlineRange = CoverGroup:AddSlider('CoverOutlineRange', {
+    Text = '范围（格）', Default = 60, Min = 10, Max = 250, Rounding = 0, Compact = false,
+})
+Options.CoverOutlineCount = CoverGroup:AddSlider('CoverOutlineCount', {
+    Text = '最多描边数量', Default = 40, Min = 5, Max = 120, Rounding = 0, Compact = false,
+})
+Options.CoverOutlineOpacity = CoverGroup:AddSlider('CoverOutlineOpacity', {
+    Text = '描边浓度', Default = 100, Min = 10, Max = 100, Rounding = 0, Suffix = ' %', Compact = false,
+})
+Toggles.CoverOutlineThroughWall = CoverGroup:AddToggle('CoverOutlineThroughWall', {
+    Text = '穿透显示（隔墙也描边）',
+    Default = false,
+    Tooltip = '关：只描看得见的掩体（不穿墙）；开：隔墙也显示描边',
+})
+do
+    local L = CoverGroup:AddLabel('描边颜色')
+    L:AddColorPicker('CoverOutlineColor', { Default = Color3.fromRGB(130, 205, 255), Title = '描边颜色' })
+end
 
 -- ====================== MOVEMENT ======================
 
@@ -33244,7 +33272,7 @@ do
     feedContainer.AnchorPoint = Vector2.new(0, 0)
     feedContainer.Size = UDim2.fromOffset(0, 0)
     feedContainer.AutomaticSize = Enum.AutomaticSize.XY
-    feedContainer.Position = UDim2.new(0, 12, 0, 64)
+    feedContainer.Position = UDim2.new(0, 12, 0, 92)
     feedContainer.BackgroundTransparency = 1
     feedContainer.ClipsDescendants = false
     feedContainer.Parent = feedGui
@@ -33269,7 +33297,28 @@ do
     listLayout.FillDirection = Enum.FillDirection.Vertical
     listLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
     listLayout.VerticalAlignment = Enum.VerticalAlignment.Top
-    listLayout.Padding = UDim.new(0, 1)
+    listLayout.Padding = UDim.new(0, tonumber(Options.FeedLineGap and Options.FeedLineGap.Value) or 1)
+
+    -- 行距变化立即生效（字号变化时已存在的行也一起更新）
+    if Options.FeedLineGap and Options.FeedLineGap.OnChanged then
+        Options.FeedLineGap:OnChanged(function(v)
+            listLayout.Padding = UDim.new(0, tonumber(v) or 1)
+        end)
+    end
+    if Options.FeedTextSize and Options.FeedTextSize.OnChanged then
+        Options.FeedTextSize:OnChanged(function(v)
+            local size = tonumber(v) or 14
+            for _, child in ipairs(feedContainer:GetChildren()) do
+                if child:IsA('Frame') then
+                    for _, line in ipairs(child:GetChildren()) do
+                        if line:IsA('TextLabel') then
+                            line.TextSize = size
+                        end
+                    end
+                end
+            end
+        end)
+    end
     listLayout.SortOrder = Enum.SortOrder.LayoutOrder
     listLayout.Parent = feedContainer
 
@@ -33380,25 +33429,6 @@ do
             hpLeft = died and 0 or 45
         end
 
-        -- 连击合并：同一目标短时间内的连续命中累加到同一条
-        if isHit and (Toggles.KillfeedMergeHits == nil or Toggles.KillfeedMergeHits.Value) then
-            local prev = hitEntryByVictim[victim]
-            if prev and prev.frame and prev.frame.Parent and (tick() - (prev.lastTick or 0)) <= 1.5 then
-                prev.damage = (prev.damage or 0) + (hitDamage > 0 and hitDamage or 0)
-                prev.lastTick = tick()
-                prev.hp = hpLeft
-                prev.died = died
-                if prev.part then
-                    prev.part = partName
-                end
-                if prev.render then
-                    pcall(prev.render)
-                end
-                scheduleExpire(prev, duration)
-                return
-            end
-        end
-
         while #activeEntries >= maxItems do
             local oldest = table.remove(activeEntries, 1)
             if oldest and oldest.frame and oldest.frame.Parent then
@@ -33423,7 +33453,7 @@ do
         line.BackgroundTransparency = 1
         line.BorderSizePixel = 0
         line.Font = Enum.Font.GothamMedium
-        line.TextSize = 14
+        line.TextSize = tonumber(Options.FeedTextSize and Options.FeedTextSize.Value) or 14
         line.RichText = true
         line.TextXAlignment = Enum.TextXAlignment.Left
         line.TextYAlignment = Enum.TextYAlignment.Center
@@ -33670,13 +33700,10 @@ end
 
         msgRoot.Visible = true
         msgLabel.TextTransparency = 1
-        msgRoot.Position = UDim2.new(0.5, 0, 0.90, 12)
 
+        -- 只做淡入，不再每次重置 Position（否则在 UI 编辑里拖好的位置一发消息就被拉回默认）
         TweenService:Create(msgLabel, TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
             TextTransparency = 0,
-        }):Play()
-        TweenService:Create(msgRoot, TweenInfo.new(0.22, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
-            Position = UDim2.new(0.5, 0, 0.90, 0),
         }):Play()
 
         local hold = tonumber(Options.PubgKillMsgDuration and Options.PubgKillMsgDuration.Value) or 3
@@ -33757,6 +33784,21 @@ end)()
         end)
     end
 
+    -- HUD 的 ScreenGui 和编辑器层可能挂在不同的宿主（CoreGui / PlayerGui），
+    -- 两者对顶部导航栏 inset 的处理不同，相差正好一个 inset 的高度。
+    -- 这里用 GuiService 的真实 inset 把虚线框的 y 对齐。
+    local GuiService = game:GetService('GuiService')
+
+    local function getInsetY()
+        local ok, tl = pcall(function()
+            return GuiService:GetGuiInset()
+        end)
+        if ok and typeof(tl) == 'Vector2' then
+            return tl.Y
+        end
+        return 36
+    end
+
     local DASH, GAP, TH = 7, 6, 1.5
 
     local function makeDashed(holder, w, h, k)
@@ -33808,24 +33850,30 @@ end)()
     local function buildHolder(entry)
         local root = entry.root
 
-        -- 虚线框画在独立的编辑器层里（绝对坐标每帧同步），
-        -- 不能挂进元素内部：命中信息容器带 UIListLayout，会把虚线框当成一个布局项排进去，
-        -- 整列被挤到屏幕外。
+        -- 虚线框挂成「元素所在 GUI 里的同级兄弟」：
+        --   · 和元素同一个坐标系，不会因为 GuiInset 差 36px 而整体偏移；
+        --   · 又不是容器的子元素，不会参与 UIListLayout / AutomaticSize（不会把命中信息挤到屏幕外）。
+        local hostGui = root.Parent or editorGui
+
         local holder = Instance.new('Frame')
         holder.Name = 'YZEditOutline'
-        holder.Size = UDim2.fromOffset(0, 0)
         holder.BackgroundTransparency = 1
         holder.ClipsDescendants = false
+        holder.AnchorPoint = root.AnchorPoint
+        holder.Position = root.Position
+        holder.Size = root.Size
         holder.ZIndex = 50
-        holder.Parent = editorGui
+        holder.Parent = hostGui
 
         local handle = Instance.new('TextButton')
         handle.Name = 'YZEditHandle'
-        handle.Size = UDim2.fromOffset(0, 0)
         handle.BackgroundTransparency = 1
+        handle.AnchorPoint = root.AnchorPoint
+        handle.Position = root.Position
+        handle.Size = root.Size
         handle.Text = ''
         handle.ZIndex = 60
-        handle.Parent = editorGui
+        handle.Parent = hostGui
 
         local data = { entry = entry, holder = holder, handle = handle, size = Vector2.new(-1, -1) }
 
@@ -33959,10 +34007,21 @@ end)()
             for line in string.gmatch(raw or '', '[^\n]+') do
                 local name, x, y = string.match(line, '^(.-)\t(%-?%d+)\t(%-?%d+)$')
                 if name and x and y then
+                    local px, py = tonumber(x), tonumber(y)
+                    local vp = (workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize) or Vector2.new(1920, 1080)
+                    local offscreen = px < -80 or py < -80 or px > (vp.X - 40) or py > (vp.Y - 20)
                     for _, entry in ipairs(entries) do
                         if entry.name == name and entry.root then
-                            entry.root.AnchorPoint = Vector2.new(0, 0)
-                            entry.root.Position = UDim2.fromOffset(tonumber(x), tonumber(y))
+                            if offscreen then
+                                -- 存档里的位置在屏幕外：丢掉，恢复默认，避免「命中信息消失」
+                                if entry.defaultAnchor and entry.defaultPos then
+                                    entry.root.AnchorPoint = entry.defaultAnchor
+                                    entry.root.Position = entry.defaultPos
+                                end
+                            else
+                                entry.root.AnchorPoint = Vector2.new(0, 0)
+                                entry.root.Position = UDim2.fromOffset(px, py)
+                            end
                         end
                     end
                 end
@@ -34022,10 +34081,17 @@ end)()
         holders = {}
 
         _G.YZFeedForce = true
+        local vpSize = (workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize) or Vector2.new(1920, 1080)
         for _, entry in ipairs(entries) do
             if entry.root then
                 entry.wasVisible = entry.root.Visible
                 entry.root.Visible = true
+                -- 跑出屏幕的元素拉回来，否则虚线框和内容都看不到
+                local ap = entry.root.AbsolutePosition
+                if ap.X < -40 or ap.Y < -40 or ap.X > vpSize.X - 30 or ap.Y > vpSize.Y - 20 then
+                    entry.root.AnchorPoint = Vector2.new(0, 0)
+                    entry.root.Position = UDim2.fromOffset(40, 120)
+                end
                 buildHolder(entry)
                 if entry.demoKey then
                     local demo = _G[entry.demoKey]
@@ -34112,23 +34178,206 @@ end)()
         for _, data in ipairs(holders) do
             local root = data.entry.root
             if root and data.holder and data.holder.Parent then
-                local pos = root.AbsolutePosition
                 local size = root.AbsoluteSize
-                data.holder.Position = UDim2.fromOffset(pos.X, pos.Y)
-                data.holder.Size = UDim2.fromOffset(size.X, size.Y)
+
+                data.holder.AnchorPoint = root.AnchorPoint
+                data.holder.Position = root.Position
+                data.holder.Size = root.Size
                 if data.handle then
-                    data.handle.Position = UDim2.fromOffset(pos.X, pos.Y)
-                    data.handle.Size = UDim2.fromOffset(size.X, size.Y)
+                    data.handle.AnchorPoint = root.AnchorPoint
+                    data.handle.Position = root.Position
+                    data.handle.Size = root.Size
                 end
-                if math.abs(size.X - data.size.X) > 1 or math.abs(size.Y - data.size.Y) > 1 then
-                    data.size = size
-                    makeDashed(data.holder, size.X, size.Y, 1)
+
+                local us = root:FindFirstChildOfClass('UIScale')
+                local sc = (us and us.Scale) or 1
+                for _, obj in ipairs({ data.holder, data.handle }) do
+                    if obj then
+                        local hs = obj:FindFirstChildOfClass('UIScale')
+                        if not hs then
+                            hs = Instance.new('UIScale')
+                            hs.Parent = obj
+                        end
+                        hs.Scale = sc
+                    end
+                end
+
+                local localSize = size / math.max(sc, 0.01)
+                -- 命中信息是自适应容器，没内容时尺寸为 0，虚线框会看不见也拖不到。
+                -- 编辑时空内容就给一个占位大小，保证能选中、能拖。
+                if localSize.X < 40 or localSize.Y < 10 then
+                    localSize = Vector2.new(260, 36)
+                    data.holder.Size = UDim2.fromOffset(260, 36)
+                    if data.handle then
+                        data.handle.Size = UDim2.fromOffset(260, 36)
+                    end
+                end
+                if math.abs(localSize.X - data.size.X) > 1 or math.abs(localSize.Y - data.size.Y) > 1 then
+                    data.size = localSize
+                    makeDashed(data.holder, localSize.X, localSize.Y, 1 / math.max(sc, 0.01))
                 end
             end
         end
     end)
 
     loadLayout()
+end)()
+
+-- ====================== 掩体描边（范围内墙体 / 掩体高亮描边） ======================
+; (function()
+    local Workspace = game:GetService('Workspace')
+
+    local active = {}
+    local params = OverlapParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.MaxParts = 500
+
+    local function clearAll()
+        for target, hl in pairs(active) do
+            pcall(function()
+                hl:Destroy()
+            end)
+        end
+        table.clear(active)
+    end
+
+    local function refresh()
+        if not (Toggles.CoverOutline and Toggles.CoverOutline.Value) then
+            clearAll()
+            return
+        end
+
+        local char = LP.Character
+        local root = char and char:FindFirstChild('HumanoidRootPart')
+        if not root then
+            clearAll()
+            return
+        end
+
+        local range = tonumber(Options.CoverOutlineRange and Options.CoverOutlineRange.Value) or 60
+        local maxCount = math.floor(tonumber(Options.CoverOutlineCount and Options.CoverOutlineCount.Value) or 40)
+        local opacity = math.clamp((tonumber(Options.CoverOutlineOpacity and Options.CoverOutlineOpacity.Value) or 100) / 100, 0.05, 1)
+        local through = Toggles.CoverOutlineThroughWall and Toggles.CoverOutlineThroughWall.Value
+        local depth = through and Enum.HighlightDepthMode.AlwaysOnTop or Enum.HighlightDepthMode.Occluded
+        local color = (Options.CoverOutlineColor and Options.CoverOutlineColor.Value) or Color3.fromRGB(130, 205, 255)
+
+        local exclude = { char }
+        if Workspace.CurrentCamera then
+            exclude[#exclude + 1] = Workspace.CurrentCamera
+        end
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p.Character then
+                exclude[#exclude + 1] = p.Character
+            end
+        end
+        params.FilterDescendantsInstances = exclude
+
+        local ok, parts = pcall(function()
+            return Workspace:GetPartBoundsInRadius(root.Position, range, params)
+        end)
+        if not ok or not parts then
+            return
+        end
+
+        -- 按距离由近到远，只描最近的 maxCount 个模型
+        local candidates = {}
+        for _, part in ipairs(parts) do
+            if part:IsA('BasePart')
+                and part.Anchored
+                and part.Transparency < 0.95
+                and part.Size.Magnitude > 4 then
+                local model = part:FindFirstAncestorOfClass('Model') or part
+                local dist = (part.Position - root.Position).Magnitude
+                local item = candidates[model]
+                if not item then
+                    candidates[model] = { target = model, dist = dist }
+                elseif dist < item.dist then
+                    item.dist = dist
+                end
+            end
+        end
+
+        local list = {}
+        for _, item in pairs(candidates) do
+            list[#list + 1] = item
+        end
+        table.sort(list, function(a, b)
+            return a.dist < b.dist
+        end)
+
+        local want = {}
+        for i = 1, math.min(#list, maxCount) do
+            want[list[i].target] = true
+        end
+
+        -- 超范围 / 超数量的先删
+        for target, hl in pairs(active) do
+            if not want[target] then
+                pcall(function()
+                    hl:Destroy()
+                end)
+                active[target] = nil
+            end
+        end
+
+        -- 补齐新的，并刷新颜色 / 透明度
+        for target in pairs(want) do
+            local hl = active[target]
+            if not hl or not hl.Parent then
+                hl = Instance.new('Highlight')
+                hl.Name = 'YZCoverOutline'
+                hl.FillTransparency = 1
+                hl.DepthMode = depth
+                hl.Adornee = target
+                hl.Parent = target
+                active[target] = hl
+            end
+            hl.OutlineColor = color
+            hl.DepthMode = depth
+            hl.OutlineTransparency = 1 - opacity
+        end
+    end
+
+    task.spawn(function()
+        while true do
+            task.wait(0.35)
+            pcall(refresh)
+        end
+    end)
+
+    if Toggles.CoverOutline then
+        Toggles.CoverOutline:OnChanged(function(v)
+            if not v then
+                pcall(clearAll)
+            else
+                task.defer(function()
+                    pcall(refresh)
+                end)
+            end
+        end)
+    end
+
+    if Toggles.CoverOutlineThroughWall then
+        Toggles.CoverOutlineThroughWall:OnChanged(function()
+            task.defer(function()
+                pcall(refresh)
+            end)
+        end)
+    end
+
+    for _, option in ipairs({ Options.CoverOutlineRange, Options.CoverOutlineCount, Options.CoverOutlineOpacity, Options.CoverOutlineColor }) do
+        if option and option.OnChanged then
+            option:OnChanged(function()
+                task.defer(function()
+                    pcall(refresh)
+                end)
+            end)
+        end
+    end
+
+    LP.CharacterAdded:Connect(function()
+        pcall(clearAll)
+    end)
 end)()
 
 -- ====================== CUSTOM VIEWMODEL & SPIN ======================
