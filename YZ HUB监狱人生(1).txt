@@ -22318,10 +22318,15 @@ Options.CoverOutlineRange = CoverGroup:AddSlider('CoverOutlineRange', {
     Text = '范围（格）', Default = 60, Min = 10, Max = 250, Rounding = 0, Compact = false,
 })
 Options.CoverOutlineCount = CoverGroup:AddSlider('CoverOutlineCount', {
-    Text = '最多描边数量', Default = 40, Min = 5, Max = 120, Rounding = 0, Compact = false,
+    Text = '最多描边数量', Default = 24, Min = 5, Max = 120, Rounding = 0, Compact = false,
+    Tooltip = '数量越多越吃性能；手机建议 15~25',
 })
 Options.CoverOutlineOpacity = CoverGroup:AddSlider('CoverOutlineOpacity', {
     Text = '描边浓度', Default = 100, Min = 10, Max = 100, Rounding = 0, Suffix = ' %', Compact = false,
+})
+Options.CoverOutlineThickness = CoverGroup:AddSlider('CoverOutlineThickness', {
+    Text = '描边粗细', Default = 2, Min = 1, Max = 6, Rounding = 0, Compact = false,
+    Tooltip = '1 = 只描细轮廓；2 以上会额外画一圈可调粗细的线框',
 })
 Toggles.CoverOutlineThroughWall = CoverGroup:AddToggle('CoverOutlineThroughWall', {
     Text = '穿透显示（隔墙也描边）',
@@ -34610,15 +34615,20 @@ end)()
     params.MaxParts = 500
 
     local function clearAll()
-        for target, hl in pairs(active) do
-            pcall(function()
-                hl:Destroy()
-            end)
+        for target, cur in pairs(active) do
+            if cur.hl then
+                pcall(function() cur.hl:Destroy() end)
+            end
+            if cur.sb then
+                pcall(function() cur.sb:Destroy() end)
+            end
         end
         table.clear(active)
     end
 
-    local function refresh()
+    local lastRefreshPos = nil
+
+    local function refresh(force)
         if not (Toggles.CoverOutline and Toggles.CoverOutline.Value) then
             clearAll()
             return
@@ -34632,8 +34642,9 @@ end)()
         end
 
         local range = tonumber(Options.CoverOutlineRange and Options.CoverOutlineRange.Value) or 60
-        local maxCount = math.floor(tonumber(Options.CoverOutlineCount and Options.CoverOutlineCount.Value) or 40)
+        local maxCount = math.floor(tonumber(Options.CoverOutlineCount and Options.CoverOutlineCount.Value) or 24)
         local opacity = math.clamp((tonumber(Options.CoverOutlineOpacity and Options.CoverOutlineOpacity.Value) or 100) / 100, 0.05, 1)
+        local thickness = math.clamp(tonumber(Options.CoverOutlineThickness and Options.CoverOutlineThickness.Value) or 2, 1, 6)
         local through = Toggles.CoverOutlineThroughWall and Toggles.CoverOutlineThroughWall.Value
         local depth = through and Enum.HighlightDepthMode.AlwaysOnTop or Enum.HighlightDepthMode.Occluded
         local color = (Options.CoverOutlineColor and Options.CoverOutlineColor.Value) or Color3.fromRGB(130, 205, 255)
@@ -34656,7 +34667,7 @@ end)()
             return
         end
 
-        -- 按距离由近到远，只描最近的 maxCount 个模型
+        -- 按模型聚合，记录最近的那块部件（描边粗细用 SelectionBox 画在这块上）
         local candidates = {}
         for _, part in ipairs(parts) do
             if part:IsA('BasePart')
@@ -34667,8 +34678,9 @@ end)()
                 local dist = (part.Position - root.Position).Magnitude
                 local item = candidates[model]
                 if not item then
-                    candidates[model] = { target = model, dist = dist }
+                    candidates[model] = { target = model, part = part, dist = dist }
                 elseif dist < item.dist then
+                    item.part = part
                     item.dist = dist
                 end
             end
@@ -34684,35 +34696,82 @@ end)()
 
         local want = {}
         for i = 1, math.min(#list, maxCount) do
-            want[list[i].target] = true
+            want[list[i].target] = list[i]
         end
 
-        -- 超范围 / 超数量的先删
-        for target, hl in pairs(active) do
+        -- 迟滞：已经描边的目标只要还在「范围 × 0.95」内就保留，
+        -- 避免跳跃/移动时第 N 个目标被反复换掉导致描边一闪一闪
+        for target, cur in pairs(active) do
             if not want[target] then
-                pcall(function()
-                    hl:Destroy()
-                end)
+                local pos = (target:IsA('Model') and target:GetPivot().Position) or target.Position
+                if (pos - root.Position).Magnitude <= range * 0.95 and cur.part then
+                    want[target] = { target = target, part = cur.part, dist = 0 }
+                end
+            end
+        end
+
+        -- 删除不需要的
+        for target, cur in pairs(active) do
+            if not want[target] then
+                if cur.hl then
+                    pcall(function() cur.hl:Destroy() end)
+                end
+                if cur.sb then
+                    pcall(function() cur.sb:Destroy() end)
+                end
                 active[target] = nil
             end
         end
 
-        -- 补齐新的，并刷新颜色 / 透明度
-        for target in pairs(want) do
-            local hl = active[target]
-            if not hl or not hl.Parent then
-                hl = Instance.new('Highlight')
+        -- 补齐 / 刷新
+        for target, item in pairs(want) do
+            local cur = active[target]
+            if not cur or not cur.hl or not cur.hl.Parent then
+                local hl = Instance.new('Highlight')
                 hl.Name = 'YZCoverOutline'
                 hl.FillTransparency = 1
-                hl.DepthMode = depth
                 hl.Adornee = target
                 hl.Parent = target
-                active[target] = hl
+                cur = cur or {}
+                cur.hl = hl
+                active[target] = cur
             end
-            hl.OutlineColor = color
-            hl.DepthMode = depth
-            hl.OutlineTransparency = 1 - opacity
+            cur.hl.OutlineColor = color
+            cur.hl.DepthMode = depth
+            cur.hl.OutlineTransparency = 1 - opacity
+
+            -- 粗细 > 1 时，用 SelectionBox 在最近那块墙上再画一圈可调粗细的线框
+            if thickness > 1 and item.part then
+                if cur.sb and cur.part == item.part then
+                    cur.sb.Color3 = color
+                    cur.sb.Transparency = 1 - opacity
+                    cur.sb.LineThickness = thickness
+                    cur.sb.AlwaysOnTop = through and true or false
+                else
+                    if cur.sb then
+                        pcall(function() cur.sb:Destroy() end)
+                        cur.sb = nil
+                    end
+                    local sb = Instance.new('SelectionBox')
+                    sb.Name = 'YZCoverBox'
+                    sb.Adornee = item.part
+                    sb.SurfaceTransparency = 1
+                    sb.Transparency = 1 - opacity
+                    sb.Color3 = color
+                    sb.LineThickness = thickness
+                    sb.AlwaysOnTop = through and true or false
+                    sb.Parent = item.part
+                    cur.sb = sb
+                    cur.part = item.part
+                end
+            elseif cur.sb then
+                pcall(function() cur.sb:Destroy() end)
+                cur.sb = nil
+                cur.part = nil
+            end
         end
+
+        lastRefreshPos = root.Position
     end
 
     -- 自适应节流：掩体多的时候自动放慢刷新，避免每帧重建大量 Highlight 导致 UI 卡死
@@ -34721,47 +34780,70 @@ end)()
         while true do
             task.wait(refreshInterval)
             local t0 = os.clock()
-            pcall(refresh)
+            local char = LP.Character
+            local root = char and char:FindFirstChild('HumanoidRootPart')
+            local moved = root and lastRefreshPos and (root.Position - lastRefreshPos).Magnitude or 999
+            -- 平时按间隔刷新；移动超过 6 格立刻刷新，避免跑动时描边跟不上
+            if moved > 6 then
+                pcall(refresh, true)
+            else
+                pcall(refresh, false)
+            end
             local cost = os.clock() - t0
             if cost > 0.06 then
                 refreshInterval = math.min(2.0, refreshInterval + 0.25)
             else
-                refreshInterval = math.max(0.5, refreshInterval - 0.05)
+                refreshInterval = math.max(0.35, refreshInterval - 0.05)
             end
         end
     end)
 
+    -- 选项改了不立刻刷新：拖滑块时每动一格都刷新会卡，统一延迟 0.25 秒只刷一次
+    local pendingToken = 0
+    local function scheduleRefresh()
+        pendingToken += 1
+        local token = pendingToken
+        task.delay(0.25, function()
+            if token ~= pendingToken then
+                return
+            end
+            pcall(refresh, true)
+        end)
+    end
+
     if Toggles.CoverOutline then
         Toggles.CoverOutline:OnChanged(function(v)
             if not v then
+                pendingToken += 1
                 pcall(clearAll)
             else
-                task.defer(function()
-                    pcall(refresh)
-                end)
+                scheduleRefresh()
             end
         end)
     end
 
     if Toggles.CoverOutlineThroughWall then
         Toggles.CoverOutlineThroughWall:OnChanged(function()
-            task.defer(function()
-                pcall(refresh)
-            end)
+            scheduleRefresh()
         end)
     end
 
-    for _, option in ipairs({ Options.CoverOutlineRange, Options.CoverOutlineCount, Options.CoverOutlineOpacity, Options.CoverOutlineColor }) do
+    for _, option in ipairs({
+        Options.CoverOutlineRange,
+        Options.CoverOutlineCount,
+        Options.CoverOutlineOpacity,
+        Options.CoverOutlineColor,
+        Options.CoverOutlineThickness,
+    }) do
         if option and option.OnChanged then
             option:OnChanged(function()
-                task.defer(function()
-                    pcall(refresh)
-                end)
+                scheduleRefresh()
             end)
         end
     end
 
     LP.CharacterAdded:Connect(function()
+        lastRefreshPos = nil
         pcall(clearAll)
     end)
 end)()
@@ -36575,20 +36657,11 @@ end
 
         expanded = false
         collapseToken += 1
-        TweenService:Create(body, TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
-            GroupTransparency = 1,
-        }):Play()
-        TweenService:Create(mini, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-            GroupTransparency = 0,
-        }):Play()
-        TweenService:Create(islandRoot, TweenInfo.new(0.30, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+        TweenService:Create(body, TweenInfo.new(0.12), { GroupTransparency = 1 }):Play()
+        TweenService:Create(mini, TweenInfo.new(0.16), { GroupTransparency = 0 }):Play()
+        TweenService:Create(islandRoot, TweenInfo.new(0.26, Enum.EasingStyle.Quint), {
             Size = UDim2.fromOffset(200, 40),
         }):Play()
-        if islandScale then
-            TweenService:Create(islandScale, TweenInfo.new(0.24, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-                Scale = islandBaseScale(),
-            }):Play()
-        end
 
         local token = collapseToken
         task.delay(0.26, function()
@@ -36616,31 +36689,11 @@ end
         end
 
         local height = 16 + math.max(#history, 1) * 26
-        -- 尺寸用 Back 缓动做出轻微过冲，再收回来，更有“弹开”的感觉
-        TweenService:Create(islandRoot, TweenInfo.new(0.34, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+        TweenService:Create(islandRoot, TweenInfo.new(0.32, Enum.EasingStyle.Quint), {
             Size = UDim2.fromOffset(300, height),
         }):Play()
-        TweenService:Create(body, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-            GroupTransparency = 0,
-        }):Play()
-        TweenService:Create(mini, TweenInfo.new(0.10, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-            GroupTransparency = 1,
-        }):Play()
-
-        -- 整体轻微放大再回弹
-        if islandScale then
-            islandScale.Scale = islandBaseScale()
-            TweenService:Create(islandScale, TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-                Scale = islandBaseScale() * 1.02,
-            }):Play()
-            task.delay(0.16, function()
-                if expanded then
-                    TweenService:Create(islandScale, TweenInfo.new(0.22, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
-                        Scale = islandBaseScale(),
-                    }):Play()
-                end
-            end)
-        end
+        TweenService:Create(body, TweenInfo.new(0.16), { GroupTransparency = 0 }):Play()
+        TweenService:Create(mini, TweenInfo.new(0.12), { GroupTransparency = 1 }):Play()
     end
 
     local islandToken = 0
