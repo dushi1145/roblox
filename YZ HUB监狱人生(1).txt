@@ -36289,105 +36289,6 @@ end
         TextColor3 = Color3.fromRGB(190, 195, 208),
     })
 
-    -- ===== FaceID（灵动岛展开时的脸部扫描动画） =====
-    local faceId = Instance.new('Frame')
-    faceId.Name = 'FaceId'
-    faceId.AnchorPoint = Vector2.new(0, 0.5)
-    faceId.Position = UDim2.new(0, 8, 0, 20)
-    faceId.Size = UDim2.fromOffset(24, 24)
-    faceId.BackgroundTransparency = 1
-    faceId.ZIndex = 9
-    faceId.Visible = false
-    faceId.Parent = pill
-
-    local faceScale = Instance.new('UIScale')
-    faceScale.Scale = 1
-    faceScale.Parent = faceId
-
-    local faceBox = Instance.new('Frame')
-    faceBox.Size = UDim2.fromScale(1, 1)
-    faceBox.BackgroundColor3 = Color3.fromRGB(10, 12, 16)
-    faceBox.BackgroundTransparency = 0.15
-    faceBox.BorderSizePixel = 0
-    faceBox.ZIndex = 9
-    faceBox.Parent = faceId
-    addCorner(faceBox, 7)
-
-    local faceStroke = Instance.new('UIStroke')
-    faceStroke.Color = Color3.fromRGB(120, 220, 255)
-    faceStroke.Thickness = 1.4
-    faceStroke.Transparency = 0.15
-    faceStroke.Parent = faceBox
-
-    local function faceBar(parent, x, y, w, h, radius)
-        local b = Instance.new('Frame')
-        b.Position = UDim2.fromOffset(x, y)
-        b.Size = UDim2.fromOffset(w, h)
-        b.BackgroundColor3 = Color3.fromRGB(220, 245, 255)
-        b.BorderSizePixel = 0
-        b.ZIndex = 10
-        b.Parent = parent
-        addCorner(b, radius or (h / 2))
-        return b
-    end
-
-    faceBar(faceBox, 6, 8, 3, 3, 99)    -- 左眼
-    faceBar(faceBox, 15, 8, 3, 3, 99)   -- 右眼
-    faceBar(faceBox, 7, 15, 10, 1.6, 1) -- 嘴
-
-    local scanBar = Instance.new('Frame')
-    scanBar.Size = UDim2.new(1, -6, 0, 1.6)
-    scanBar.Position = UDim2.fromOffset(3, 2)
-    scanBar.BackgroundColor3 = Color3.fromRGB(90, 255, 170)
-    scanBar.BackgroundTransparency = 0.15
-    scanBar.BorderSizePixel = 0
-    scanBar.ZIndex = 11
-    scanBar.Parent = faceBox
-    addCorner(scanBar, 1)
-
-    local faceToken = 0
-
-    local function playFaceId()
-        faceToken += 1
-        local token = faceToken
-        faceId.Visible = true
-        faceScale.Scale = 0.7
-        faceBox.BackgroundTransparency = 0.15
-        faceStroke.Transparency = 0.15
-        scanBar.Visible = true
-        scanBar.Position = UDim2.fromOffset(3, 2)
-
-        TweenService:Create(faceScale, TweenInfo.new(0.22, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
-            Scale = 1,
-        }):Play()
-        TweenService:Create(scanBar, TweenInfo.new(0.62, Enum.EasingStyle.Linear), {
-            Position = UDim2.fromOffset(3, 20),
-        }):Play()
-
-        task.delay(0.95, function()
-            if token ~= faceToken then
-                return
-            end
-            TweenService:Create(faceId, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-                BackgroundTransparency = 1,
-            }):Play()
-            TweenService:Create(faceBox, TweenInfo.new(0.25), {
-                BackgroundTransparency = 1,
-            }):Play()
-            TweenService:Create(faceStroke, TweenInfo.new(0.25), {
-                Transparency = 1,
-            }):Play()
-            TweenService:Create(scanBar, TweenInfo.new(0.18), {
-                BackgroundTransparency = 1,
-            }):Play()
-            task.delay(0.3, function()
-                if token == faceToken then
-                    faceId.Visible = false
-                end
-            end)
-        end)
-    end
-
     local body = Instance.new('CanvasGroup')
     body.Name = 'Body'
     body.Size = UDim2.fromScale(1, 1)
@@ -36665,8 +36566,6 @@ end
 
         expanded = false
         collapseToken += 1
-        faceToken += 1
-        faceId.Visible = false
         TweenService:Create(body, TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
             GroupTransparency = 1,
         }):Play()
@@ -36700,7 +36599,6 @@ end
         expanded = true
         collapseToken += 1
         body.Visible = true
-        pcall(playFaceId)
 
         islandGui.Enabled = true
         islandRoot.Visible = true
