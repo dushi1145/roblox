@@ -26297,13 +26297,8 @@ local SOUND_FOLDER = 'YZ_HUB/sounds'
 -- 音效文件夹：默认是执行器工作目录下的 YZ_HUB/sounds，
 -- 也可以在菜单里填绝对路径（能不能读取决于执行器是否允许访问工作目录以外的文件）
 local function getSoundFolder()
-    local path = Options.SoundFolderPath and Options.SoundFolderPath.Value
-    if type(path) ~= 'string' or path == '' then
-        path = SOUND_FOLDER
-    end
-    path = string.gsub(path, '\\', '/')
-    path = string.gsub(path, '/+$', '')
-    return path
+    -- 固定使用执行器工作目录下的 YZ_HUB/sounds（自定义路径输入框已移除）
+    return SOUND_FOLDER
 end
 
 local function scanLocalSounds()
@@ -31138,61 +31133,6 @@ wireSoundPreview(Options.KillsoundSelect, function()
 end)
 
 SoundsGroup:AddDivider()
-SoundsGroup:AddInput('SoundFolderPath', {
-    Text = '音效文件夹',
-    Placeholder = '默认 YZ_HUB/sounds，也可填绝对路径',
-})
-SoundsGroup:AddButton('生成「打开文件夹」快捷方式', function()
-    -- 脚本本身没法直接调用资源管理器（Luau 没有 os.execute / 进程 API），
-    -- 所以在音效文件夹里写一个 .bat，双击它就等于打开这个文件夹。
-    local folder = getSoundFolder()
-    if makefolder then
-        pcall(makefolder, folder)
-    end
-    local ok = pcall(function()
-        writefile(folder .. '/打开音效文件夹.bat',
-            '@echo off\r\nexplorer "%~dp0"\r\n')
-    end)
-    -- 再写一个醒目的标记文件：找不到文件夹时，在资源管理器搜索这个名字就能定位
-    pcall(function()
-        writefile(folder .. '/在这里_YZ_HUB音效文件夹.txt',
-            '这个文件夹就是放命中/击杀音效的地方\r\n支持 .mp3 / .ogg\r\n')
-    end)
-    if ok then
-        Library:Notify('已生成：' .. folder .. '（里面还有「打开音效文件夹.bat」和「在这里_YZ_HUB音效文件夹.txt」）', 7)
-    else
-        Library:Notify('生成失败：writefile 不可用（或该路径不可写）', 5)
-    end
-end)
-SoundsGroup:AddButton('复制音效文件夹路径', function()
-    local folder = getSoundFolder()
-    local ok = pcall(function()
-        setclipboard(folder)
-    end)
-    Library:Notify(ok and ('已复制路径：' .. folder) or ('路径：' .. folder), 5)
-end)
-SoundsGroup:AddButton('音效目录诊断', function()
-    local parts = {}
-
-    local okRoot, rootFiles = pcall(function()
-        return listfiles('.')
-    end)
-    if okRoot and type(rootFiles) == 'table' then
-        local names = {}
-        for i, path in ipairs(rootFiles) do
-            if i > 10 then break end
-            names[#names + 1] = tostring(path)
-        end
-        parts[#parts + 1] = '工作目录: ' .. table.concat(names, ', ')
-    else
-        parts[#parts + 1] = 'listfiles(.) 不可用（该执行器可能不支持文件 API）'
-    end
-
-    parts[#parts + 1] = 'getcustomasset: ' .. (getcustomasset and '有' or '无')
-    parts[#parts + 1] = 'makefolder: ' .. (makefolder and '有' or '无')
-
-    Library:Notify(table.concat(parts, '\n'), 10)
-end)
 SoundsGroup:AddButton('刷新本地音效列表', function()
     local n, carved, folderUsed, triedPaths = scanLocalSounds()
     local values = buildSoundValues()
@@ -31241,6 +31181,44 @@ wireSoundPreview(Options.HurtSoundSelect, function()
 end)
 wireSoundPreview(Options.DryFireSoundSelect, function()
     previewSelectSound(Options.DryFireSoundSelect, Options.DryFireSoundVolume)
+end)
+
+-- ===== 检查配置里引用的本地音效是否缺失（换机器/换人用 cfg 时最常见） =====
+local missingSoundNotified = {}
+local function checkMissingSounds()
+    local list = {
+        { opt = Options.HitsoundSelect, label = '命中音效' },
+        { opt = Options.KillsoundSelect, label = '击杀音效' },
+        { opt = Options.HurtSoundSelect, label = '受击音效' },
+        { opt = Options.DryFireSoundSelect, label = '空枪音效' },
+    }
+
+    for _, item in ipairs(list) do
+        local name = item.opt and item.opt.Value
+        if type(name) == 'string' and name ~= '' and name ~= 'None' then
+            if not resolveSoundAsset(name) then
+                local key = item.label .. '|' .. name
+                if not missingSoundNotified[key] then
+                    missingSoundNotified[key] = true
+                    local text = string.format('缺少%s[%s]，请寻找cfg作者获取', item.label, name)
+                    if _G.YZIslandNotice then
+                        pcall(_G.YZIslandNotice, text, 8)
+                    else
+                        pcall(function()
+                            Library:Notify(text, 8)
+                        end)
+                    end
+                end
+            end
+        end
+    end
+end
+
+_G.YZCheckMissingSounds = checkMissingSounds
+
+-- 加载完成后检查一次（等本地音效扫描 + 灵动岛都就绪）
+task.delay(5, function()
+    pcall(checkMissingSounds)
 end)
 
 -- ===== 受伤 / 空枪音效的触发逻辑（IIFE：不占顶层寄存器） =====
@@ -33069,6 +33047,11 @@ local function applyCfgString(str)
         end
         if _G.YZClampHudLayout then
             pcall(_G.YZClampHudLayout)
+        end
+        if _G.YZCheckMissingSounds then
+            task.delay(0.5, function()
+                pcall(_G.YZCheckMissingSounds)
+            end)
         end
         -- 背景图不透明度重新按当前值刷一次
         pcall(function()
