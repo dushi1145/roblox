@@ -26275,6 +26275,19 @@ getConfig = function(tool)
     return cfg
 end
 
+local hitsoundIds = {
+    ['Fatality'] = 115982072912004,
+    ['Skeet'] = 83717596220569,
+    ['Bell'] = 83641156499511,
+    ['COD'] = 77082587278347,
+    ['Metal'] = 2868331684,
+    ['TF2 Critical'] = 6405267300,
+    ['TF2'] = 118731928809041,
+    ['Rust'] = 121566025787365,
+    ['Neverlose'] = 2866718318,
+    ['NL'] = 82938206376993,
+}
+
 -- ====================== 本地音效（可自己加） ======================
 -- 把 .mp3 / .ogg 文件丢进执行器工作目录下的 YZ_HUB/sounds 文件夹即可（文件名就是下拉里的名字）
 -- 例：YZ_HUB/sounds/我的命中.mp3  →  下拉里出现「我的命中」
@@ -26387,18 +26400,6 @@ end
 
 scanLocalSounds()
 
-local hitsoundIds = {
-    ['Fatality'] = 115982072912004,
-    ['Skeet'] = 83717596220569,
-    ['Bell'] = 83641156499511,
-    ['COD'] = 77082587278347,
-    ['Metal'] = 2868331684,
-    ['TF2 Critical'] = 6405267300,
-    ['TF2'] = 118731928809041,
-    ['Rust'] = 121566025787365,
-    ['Neverlose'] = 2866718318,
-    ['NL'] = 82938206376993,
-}
 
 local playHitsound = nil
 local playKillsound = nil
