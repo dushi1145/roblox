@@ -31093,6 +31093,40 @@ SoundsGroup:AddButton('试听命中音效', function()
     if playHitsound then playHitsound(true) end
 end)
 
+-- 下拉里「选到哪个就试听一次」（菜单打开时才触发，加载配置时不吵）
+local soundPreviewReady = false
+task.delay(2, function()
+    soundPreviewReady = true
+end)
+
+local function wireSoundPreview(opt, player)
+    if not (opt and opt.OnChanged) then
+        return
+    end
+    opt:OnChanged(function()
+        if not soundPreviewReady then
+            return
+        end
+        if not (Library and Library.Toggled) then
+            return
+        end
+        task.defer(function()
+            pcall(player)
+        end)
+    end)
+end
+
+wireSoundPreview(Options.HitsoundSelect, function()
+    if playHitsound then
+        playHitsound(true)
+    end
+end)
+wireSoundPreview(Options.KillsoundSelect, function()
+    if playKillsound then
+        playKillsound(true)
+    end
+end)
+
 SoundsGroup:AddDivider()
 
 Toggles.Killsound = SoundsGroup:AddToggle('Killsound', { Text = '击杀音效', Default = false })
@@ -31177,6 +31211,121 @@ SoundsGroup:AddButton('刷新本地音效列表', function()
     Library:Notify(msg, 6)
 end)
 SoundsGroup:AddLabel('本地音效：把 .mp3 或 .ogg 放进执行器的 YZ_HUB/sounds 文件夹，文件名就是下拉里的名字，放好后点上面的「刷新本地音效列表」')
+
+SoundsGroup:AddDivider()
+Toggles.HurtSound = SoundsGroup:AddToggle('HurtSound', { Text = '受伤音效', Default = false, Tooltip = '自己掉血时播放' })
+Options.HurtSoundSelect = WXDrop(SoundsGroup, 'HurtSoundSelect', { Text = '受伤音效', Default = 1, Values = buildSoundValues() })
+Options.HurtSoundVolume = SoundsGroup:AddSlider('HurtSoundVolume', { Text = '受伤音效音量', Default = 70, Min = 1, Max = 100, Rounding = 0, Compact = false })
+
+Toggles.DryFireSound = SoundsGroup:AddToggle('DryFireSound', { Text = '空枪音效', Default = false, Tooltip = '没子弹还开枪时播放' })
+Options.DryFireSoundSelect = WXDrop(SoundsGroup, 'DryFireSoundSelect', { Text = '空枪音效', Default = 1, Values = buildSoundValues() })
+Options.DryFireSoundVolume = SoundsGroup:AddSlider('DryFireSoundVolume', { Text = '空枪音效音量', Default = 70, Min = 1, Max = 100, Rounding = 0, Compact = false })
+
+-- 这两个下拉也做成「选中就试听」
+local function previewSelectSound(selOpt, volOpt)
+    local asset = resolveSoundAsset(selOpt and selOpt.Value)
+    if not asset then
+        return
+    end
+    local snd = Instance.new('Sound')
+    snd.SoundId = asset
+    snd.Volume = math.clamp(((volOpt and volOpt.Value) or 70) / 100, 0.05, 1)
+    snd.Parent = workspace
+    snd:Play()
+    Debris:AddItem(snd, 2)
+end
+
+wireSoundPreview(Options.HurtSoundSelect, function()
+    previewSelectSound(Options.HurtSoundSelect, Options.HurtSoundVolume)
+end)
+wireSoundPreview(Options.DryFireSoundSelect, function()
+    previewSelectSound(Options.DryFireSoundSelect, Options.DryFireSoundVolume)
+end)
+
+-- ===== 受伤 / 空枪音效的触发逻辑（IIFE：不占顶层寄存器） =====
+; (function()
+    local lastHurt = 0
+    local lastDry = 0
+
+    local function playByName(selOpt, volOpt)
+        if not (selOpt and selOpt.Value) then
+            return
+        end
+        local asset = resolveSoundAsset(selOpt.Value)
+        if not asset then
+            return
+        end
+        local snd = Instance.new('Sound')
+        snd.SoundId = asset
+        snd.Volume = math.clamp(((volOpt and volOpt.Value) or 70) / 100, 0.05, 1)
+        snd.Parent = workspace
+        snd:Play()
+        Debris:AddItem(snd, 2)
+    end
+
+    -- 受伤：监听自己 Humanoid 的 HealthChanged
+    local function watchCharacter(char)
+        local hum = char and char:WaitForChild('Humanoid', 5)
+        if not hum then
+            return
+        end
+        local lastHealth = hum.Health
+        hum.HealthChanged:Connect(function(h)
+            local decreasing = h < lastHealth - 0.5
+            if decreasing and Toggles.HurtSound and Toggles.HurtSound.Value then
+                local now = os.clock()
+                if now - lastHurt > 0.12 then
+                    lastHurt = now
+                    playByName(Options.HurtSoundSelect, Options.HurtSoundVolume)
+                end
+            end
+            lastHealth = h
+        end)
+    end
+
+    if LP.Character then
+        task.spawn(function()
+            pcall(watchCharacter, LP.Character)
+        end)
+    end
+    LP.CharacterAdded:Connect(function(char)
+        task.spawn(function()
+            pcall(watchCharacter, char)
+        end)
+    end)
+
+    -- 空枪：按住/点鼠标时，如果手上是枪且弹药为 0，就播一声
+    UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if gameProcessed then
+            return
+        end
+        if input.UserInputType ~= Enum.UserInputType.MouseButton1
+            and input.UserInputType ~= Enum.UserInputType.Touch then
+            return
+        end
+        if not (Toggles.DryFireSound and Toggles.DryFireSound.Value) then
+            return
+        end
+
+        local char = LP.Character
+        local tool = char and char:FindFirstChildOfClass('Tool')
+        if not tool then
+            return
+        end
+
+        local ammo = tool:GetAttribute('Local_CurrentAmmo') or tool:GetAttribute('CurrentAmmo')
+        if ammo == nil or tonumber(ammo) > 0 then
+            return
+        end
+
+        local now = os.clock()
+        if now - lastDry < 0.15 then
+            return
+        end
+        lastDry = now
+        playByName(Options.DryFireSoundSelect, Options.DryFireSoundVolume)
+    end)
+end)()
 
 local MiscGroup = Tabs.Misc:AddLeftGroupbox('杂项')
 Toggles.Invisible = MiscGroup:AddToggle('Invisible', { Text = '隐身', Default = false, Tooltip = '通过 CFrame 位置失同步让其他玩家看不到你' })
