@@ -31151,7 +31151,8 @@ SoundsGroup:AddButton('刷新本地音效列表', function()
     end
     Library:Notify(msg, 6)
 end)
-SoundsGroup:AddLabel('本地音效：把 .mp3 或 .ogg 放进执行器的 YZ_HUB/sounds 文件夹，文件名就是下拉里的名字，放好后点上面的「刷新本地音效列表」')
+-- 第二个参数 true = 允许换行，长说明会自动折成两行，不会超出分组框
+SoundsGroup:AddLabel('本地音效：把 .mp3 / .ogg 放进执行器的 YZ_HUB/sounds 文件夹，文件名就是下拉里的名字，放好后点上面的「刷新本地音效列表」', true)
 
 SoundsGroup:AddDivider()
 Toggles.HurtSound = SoundsGroup:AddToggle('HurtSound', { Text = '受伤音效', Default = false, Tooltip = '自己掉血时播放' })
