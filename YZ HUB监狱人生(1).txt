@@ -31121,12 +31121,6 @@ wireSoundPreview(Options.HitsoundSelect, function()
         playHitsound(true)
     end
 end)
-wireSoundPreview(Options.KillsoundSelect, function()
-    if playKillsound then
-        playKillsound(true)
-    end
-end)
-
 SoundsGroup:AddDivider()
 
 Toggles.Killsound = SoundsGroup:AddToggle('Killsound', { Text = '击杀音效', Default = false })
@@ -31134,6 +31128,13 @@ Options.KillsoundSelect = WXDrop(SoundsGroup, 'KillsoundSelect', { Text = '击�
 Options.KillsoundVolume = SoundsGroup:AddSlider('KillsoundVolume', { Text = '击杀音效音量', Default = 80, Min = 1, Max = 100, Rounding = 0, Compact = false })
 SoundsGroup:AddButton('试听击杀音效', function()
     if playKillsound then playKillsound(true) end
+end)
+
+-- 击杀音效在下拉创建之后才绑定（之前绑在创建前，Options.KillsoundSelect 还是 nil，所以不会响）
+wireSoundPreview(Options.KillsoundSelect, function()
+    if playKillsound then
+        playKillsound(true)
+    end
 end)
 
 SoundsGroup:AddDivider()
