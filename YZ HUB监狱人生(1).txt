@@ -26294,17 +26294,86 @@ local hitsoundIds = {
 local localSounds = {}
 local SOUND_FOLDER = 'YZ_HUB/sounds'
 
+-- 音效文件夹：默认是执行器工作目录下的 YZ_HUB/sounds，
+-- 也可以在菜单里填绝对路径（能不能读取决于执行器是否允许访问工作目录以外的文件）
+local function getSoundFolder()
+    local path = Options.SoundFolderPath and Options.SoundFolderPath.Value
+    if type(path) ~= 'string' or path == '' then
+        path = SOUND_FOLDER
+    end
+    path = string.gsub(path, '\\', '/')
+    path = string.gsub(path, '/+$', '')
+    return path
+end
+
 local function scanLocalSounds()
     table.clear(localSounds)
     if not (listfiles and isfolder and getcustomasset) then
         return 0
     end
 
-    local ok, files = pcall(function()
-        if isfolder(SOUND_FOLDER) then
-            return listfiles(SOUND_FOLDER)
+    -- 手机执行器的工作目录各不相同，这里挨个试；
+    -- 都不存在时尝试自动创建 YZ_HUB/sounds（有 makefolder 才行）
+    local custom = getSoundFolder()
+    local candidates = {
+        custom,
+        'YZ_HUB/sounds',
+        -- Android 常见执行器工作目录
+        '/sdcard/Delta/workspace/YZ_HUB/sounds',
+        '/storage/emulated/0/Delta/workspace/YZ_HUB/sounds',
+        '/sdcard/Delta/YZ_HUB/sounds',
+        '/storage/emulated/0/Delta/YZ_HUB/sounds',
+        '/sdcard/Xeno/workspace/YZ_HUB/sounds',
+        '/sdcard/Fluxus/workspace/YZ_HUB/sounds',
+        '/sdcard/Arceus/workspace/YZ_HUB/sounds',
+        '/sdcard/Wave/workspace/YZ_HUB/sounds',
+        -- 直接放在内部存储根目录
+        '/sdcard/YZ_HUB/sounds',
+        '/storage/emulated/0/YZ_HUB/sounds',
+        -- PC 执行器（Potassium / Real / Mad）多数把 workspace 放在脚本同级，
+        -- 统一先试相对路径，再试常见安装目录下的 workspace
+        '/storage/emulated/0/Documents/YZ_HUB/sounds',
+    }
+
+    local folder = nil
+    local tried = {}
+    for _, path in ipairs(candidates) do
+        if path and path ~= '' then
+            local okF, isf = pcall(function()
+                return isfolder(path)
+            end)
+            if okF and isf then
+                folder = path
+                break
+            end
+            if not tried[path] then
+                tried[path] = true
+            end
         end
-        return nil
+    end
+
+    if not folder and makefolder then
+        pcall(makefolder, 'YZ_HUB')
+        pcall(makefolder, 'YZ_HUB/sounds')
+        local okF, isf = pcall(function()
+            return isfolder('YZ_HUB/sounds')
+        end)
+        if okF and isf then
+            folder = 'YZ_HUB/sounds'
+        end
+    end
+
+    if not folder then
+        local list = {}
+        for path in pairs(tried) do
+            list[#list + 1] = path
+        end
+        table.sort(list)
+        return 0, 0, nil, table.concat(list, ' / ')
+    end
+
+    local ok, files = pcall(function()
+        return listfiles(folder)
     end)
     if not ok or type(files) ~= 'table' then
         return 0
@@ -26343,7 +26412,7 @@ local function scanLocalSounds()
                     if startPos then
                         local base = string.match(path, '([^/\\]+)%.[^./\\]+$')
                         if base then
-                            local outPath = SOUND_FOLDER .. '/' .. base .. '.' .. outExt
+                            local outPath = folder .. '/' .. base .. '.' .. outExt
                             local okW = pcall(writefile, outPath, string.sub(data, startPos))
                             if okW then
                                 carved += 1
@@ -26355,7 +26424,7 @@ local function scanLocalSounds()
         end
         if carved > 0 then
             local ok2, list2 = pcall(function()
-                return listfiles(SOUND_FOLDER)
+                return listfiles(folder)
             end)
             if ok2 and type(list2) == 'table' then
                 files = list2
@@ -26380,7 +26449,7 @@ local function scanLocalSounds()
             end
         end
     end
-    return count, carved
+    return count, carved, folder
 end
 
 -- 名字 → 实际 SoundId（本地文件优先，其次内置 asset）
@@ -31034,16 +31103,78 @@ SoundsGroup:AddButton('试听击杀音效', function()
 end)
 
 SoundsGroup:AddDivider()
+SoundsGroup:AddInput('SoundFolderPath', {
+    Text = '音效文件夹',
+    Placeholder = '默认 YZ_HUB/sounds，也可填绝对路径',
+})
+SoundsGroup:AddButton('生成「打开文件夹」快捷方式', function()
+    -- 脚本本身没法直接调用资源管理器（Luau 没有 os.execute / 进程 API），
+    -- 所以在音效文件夹里写一个 .bat，双击它就等于打开这个文件夹。
+    local folder = getSoundFolder()
+    if makefolder then
+        pcall(makefolder, folder)
+    end
+    local ok = pcall(function()
+        writefile(folder .. '/打开音效文件夹.bat',
+            '@echo off\r\nexplorer "%~dp0"\r\n')
+    end)
+    -- 再写一个醒目的标记文件：找不到文件夹时，在资源管理器搜索这个名字就能定位
+    pcall(function()
+        writefile(folder .. '/在这里_YZ_HUB音效文件夹.txt',
+            '这个文件夹就是放命中/击杀音效的地方\r\n支持 .mp3 / .ogg\r\n')
+    end)
+    if ok then
+        Library:Notify('已生成：' .. folder .. '（里面还有「打开音效文件夹.bat」和「在这里_YZ_HUB音效文件夹.txt」）', 7)
+    else
+        Library:Notify('生成失败：writefile 不可用（或该路径不可写）', 5)
+    end
+end)
+SoundsGroup:AddButton('复制音效文件夹路径', function()
+    local folder = getSoundFolder()
+    local ok = pcall(function()
+        setclipboard(folder)
+    end)
+    Library:Notify(ok and ('已复制路径：' .. folder) or ('路径：' .. folder), 5)
+end)
+SoundsGroup:AddButton('音效目录诊断', function()
+    local parts = {}
+
+    local okRoot, rootFiles = pcall(function()
+        return listfiles('.')
+    end)
+    if okRoot and type(rootFiles) == 'table' then
+        local names = {}
+        for i, path in ipairs(rootFiles) do
+            if i > 10 then break end
+            names[#names + 1] = tostring(path)
+        end
+        parts[#parts + 1] = '工作目录: ' .. table.concat(names, ', ')
+    else
+        parts[#parts + 1] = 'listfiles(.) 不可用（该执行器可能不支持文件 API）'
+    end
+
+    parts[#parts + 1] = 'getcustomasset: ' .. (getcustomasset and '有' or '无')
+    parts[#parts + 1] = 'makefolder: ' .. (makefolder and '有' or '无')
+
+    Library:Notify(table.concat(parts, '\n'), 10)
+end)
 SoundsGroup:AddButton('刷新本地音效列表', function()
-    local n, carved = scanLocalSounds()
+    local n, carved, folderUsed, triedPaths = scanLocalSounds()
     local values = buildSoundValues()
     if Options.HitsoundSelect then pcall(function() Options.HitsoundSelect:SetValues(values) end) end
     if Options.KillsoundSelect then pcall(function() Options.KillsoundSelect:SetValues(values) end) end
-    local msg = (n > 0) and ('已加载 ' .. n .. ' 个本地音效') or 'YZ_HUB/sounds 里没有可用音效'
+    local msg
+    if n > 0 then
+        msg = '已加载 ' .. n .. ' 个本地音效（' .. tostring(folderUsed or '') .. '）'
+    elseif folderUsed then
+        msg = '音效文件夹是 ' .. folderUsed .. '，但里面没有 .mp3 / .ogg'
+    else
+        msg = '找不到音效文件夹，试过：' .. tostring(triedPaths or '')
+    end
     if (carved or 0) > 0 then
         msg = msg .. '（从 vsnd_c 提取了 ' .. carved .. ' 个）'
     end
-    Library:Notify(msg, 4)
+    Library:Notify(msg, 6)
 end)
 SoundsGroup:AddLabel('本地音效：把 .mp3 或 .ogg 放进执行器的 YZ_HUB/sounds 文件夹，文件名就是下拉里的名字，放好后点上面的「刷新本地音效列表」')
 
