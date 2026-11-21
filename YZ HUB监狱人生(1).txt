@@ -22306,23 +22306,21 @@ Options.PubgKillMsgDuration = KillMsgGroup:AddSlider('PubgKillMsgDuration', {
     Text = '停留时长（秒）', Default = 3, Min = 1, Max = 8, Rounding = 1, Compact = false
 })
 
--- 掩体绘制（蔓延波纹 + 圈内描边，波纹扫到哪面墙就点亮哪面墙）
+-- 掩体绘制（范围内掩体全部描边，越远越淡）
 local CoverGroup = Tabs.Visuals:AddLeftGroupbox('掩体绘制')
 
 Toggles.CoverOutline = CoverGroup:AddToggle('CoverOutline', {
     Text = '启用掩体绘制',
     Default = false,
-    Tooltip = '脚下向外蔓延的能量波纹，波纹扫过的掩体被描边点亮（不是烟雾/雾圈）',
+    Tooltip = '范围内的掩体全部描边常亮，越靠近越清晰、到边缘自然淡出（没有波纹/烟雾）',
 })
 Options.CoverOutlineRange = CoverGroup:AddSlider('CoverOutlineRange', {
-    Text = '扩散半径（格）', Default = 60, Min = 10, Max = 250, Rounding = 0, Compact = false,
-})
-Options.CoverOutlineCount = CoverGroup:AddSlider('CoverOutlineCount', {
-    Text = '最多描边数量', Default = 24, Min = 5, Max = 120, Rounding = 0, Compact = false,
-    Tooltip = '数量越多越吃性能；手机建议 15~25',
+    Text = '范围（格）', Default = 60, Min = 10, Max = 400, Rounding = 0, Compact = false,
+    Tooltip = '以自己为圆心，这个半径内的掩体都会描边；边缘按距离逐渐变淡',
 })
 Options.CoverOutlineOpacity = CoverGroup:AddSlider('CoverOutlineOpacity', {
     Text = '描边浓度', Default = 100, Min = 10, Max = 100, Rounding = 0, Suffix = ' %', Compact = false,
+    Tooltip = '指脚下附近的描边浓度，远处会自动变淡',
 })
 Options.CoverOutlineThickness = CoverGroup:AddSlider('CoverOutlineThickness', {
     Text = '描边粗细', Default = 2, Min = 1, Max = 6, Rounding = 0, Compact = false,
@@ -22333,17 +22331,9 @@ Toggles.CoverOutlineThroughWall = CoverGroup:AddToggle('CoverOutlineThroughWall'
     Default = false,
     Tooltip = '关：只描看得见的掩体（不穿墙）；开：隔墙也显示描边',
 })
-Options.CoverFogOpacity = CoverGroup:AddSlider('CoverFogOpacity', {
-    Text = '波纹浓度', Default = 80, Min = 10, Max = 100, Rounding = 0, Suffix = ' %', Compact = false,
-    Tooltip = '脚下蔓延波纹的亮度（越高越明显）',
-})
-Options.CoverWaveSpeed = CoverGroup:AddSlider('CoverWaveSpeed', {
-    Text = '蔓延速度', Default = 100, Min = 30, Max = 300, Rounding = 0, Suffix = ' %', Compact = false,
-    Tooltip = '波纹向外扩散的快慢，掩体被点亮的时机跟着波纹一起走',
-})
 do
-    local L = CoverGroup:AddLabel('描边 / 波纹颜色')
-    L:AddColorPicker('CoverOutlineColor', { Default = Color3.fromRGB(130, 205, 255), Title = '描边 / 波纹颜色' })
+    local L = CoverGroup:AddLabel('描边颜色')
+    L:AddColorPicker('CoverOutlineColor', { Default = Color3.fromRGB(130, 205, 255), Title = '描边颜色' })
 end
 
 -- ====================== MOVEMENT ======================
@@ -26443,7 +26433,7 @@ local function scanLocalSounds()
                 end)
                 if ok2 and type(asset) == 'string' and asset ~= '' then
                     localSounds[base] = asset
-                    count += 1
+                    count = count + 1
                 end
             end
         end
@@ -32665,7 +32655,7 @@ end)()
                 done = callback(conn) == true
             end)
             if done then
-                count += 1
+                count = count + 1
             end
         end
         return true, count
@@ -35014,63 +35004,25 @@ end)()
     end)
 end)()
 
--- ====================== 掩体绘制（蔓延波纹 + 圈内描边） ======================
--- 效果：脚下向外「蔓延」的能量波纹（纯屏幕空间描线，没有烟雾 / 没有粒子 / 没有实体圆柱），
---       波纹扫到哪一面掩体，那一面掩体就被描边点亮；越近越亮，扫到半径边缘自然熄灭。
+-- ====================== 掩体绘制（范围内全部描边，越远越淡） ======================
+-- 效果：以自己为圆心，半径内的掩体全部描边常亮；距离越远越淡，到半径边缘完全消失。
+--       没有任何波纹 / 烟雾 / 粒子，纯 Highlight + SelectionBox 描边。
 ; (function()
     local Workspace = game:GetService('Workspace')
 
-    -- 清掉旧版本留下的雾圈实体（旧实现是两片 ForceField 圆柱，看起来像烟雾）
+    -- 清理旧实现留下的雾圈圆柱（早期版本用的是 ForceField 圆柱）
     for _, obj in ipairs(Workspace:GetChildren()) do
         if string.sub(obj.Name, 1, 9) == 'YZFogRing' then
             pcall(function() obj:Destroy() end)
         end
     end
 
-    local SEG = 48            -- 每一圈的分段数（越大越圆，开销越高）
-    local MAX_WAVES = 3       -- 同屏同时存在的波纹道数
-    local BASE_PERIOD = 1.7   -- 一道波纹从脚下扩到半径边缘的时间（秒，100% 速度时）
-
-    local waveLines = {}
-
-    local function ensureLine(w, s)
-        local row = waveLines[w]
-        if not row then
-            row = {}
-            waveLines[w] = row
-        end
-        local line = row[s]
-        if not line then
-            local ok, obj = pcall(function() return Drawing.new('Line') end)
-            if not ok or not obj then return nil end
-            obj.Thickness = 1.6
-            obj.Transparency = 1
-            obj.Color = Color3.fromRGB(130, 205, 255)
-            obj.ZIndex = 8
-            obj.Visible = false
-            row[s] = obj
-            line = obj
-        end
-        return line
-    end
-
-    local function hideWaves()
-        for _, row in pairs(waveLines) do
-            for _, line in pairs(row) do
-                pcall(function() line.Visible = false end)
-            end
-        end
-    end
+    local MAX_TARGETS = 180   -- 内部保护上限：极端场景一次上千个模型时只描最近的这些
 
     local active = {}
     local params = OverlapParams.new()
     params.FilterType = Enum.RaycastFilterType.Exclude
-    params.MaxParts = 400
-
-    local state = {
-        groundY = nil,
-        range = 60,
-    }
+    params.MaxParts = 600
 
     local function clearHighlights()
         for _, cur in pairs(active) do
@@ -35080,48 +35032,24 @@ end)()
         table.clear(active)
     end
 
-    local function clearAll()
-        clearHighlights()
-        hideWaves()
-        state.groundY = nil
-    end
-
-    local function colorLerp(a, b, t)
-        return Color3.new(a.R + (b.R - a.R) * t, a.G + (b.G - a.G) * t, a.B + (b.B - a.B) * t)
-    end
-
-    -- 慢速扫描：决定「哪些掩体参与绘制」以及半径/地面高度
     local function scan()
         local enabled = Toggles.CoverOutline and Toggles.CoverOutline.Value
-        if not enabled then
-            clearAll()
-            return
-        end
-
         local char = LP.Character
         local root = char and char:FindFirstChild('HumanoidRootPart')
-        if not root then
-            clearAll()
+        if not enabled or not root then
+            if next(active) then
+                clearHighlights()
+            end
             return
         end
 
-        local range = tonumber(Options.CoverOutlineRange and Options.CoverOutlineRange.Value) or 60
-        local maxCount = math.floor(tonumber(Options.CoverOutlineCount and Options.CoverOutlineCount.Value) or 24)
+        local range = math.max(tonumber(Options.CoverOutlineRange and Options.CoverOutlineRange.Value) or 60, 5)
+        local opacity = math.clamp((tonumber(Options.CoverOutlineOpacity and Options.CoverOutlineOpacity.Value) or 100) / 100, 0.05, 1)
+        local thickness = math.clamp(tonumber(Options.CoverOutlineThickness and Options.CoverOutlineThickness.Value) or 2, 1, 6)
         local through = Toggles.CoverOutlineThroughWall and Toggles.CoverOutlineThroughWall.Value
-        state.range = range
-
-        -- 向下打一条射线找地面，让波纹贴着地而不是悬空 / 穿进地板
-        local groundY = root.Position.Y - 2.9
-        pcall(function()
-            local rc = RaycastParams.new()
-            rc.FilterType = Enum.RaycastFilterType.Exclude
-            rc.FilterDescendantsInstances = { char }
-            local hit = Workspace:Raycast(root.Position, Vector3.new(0, -14, 0), rc)
-            if hit then
-                groundY = hit.Position.Y
-            end
-        end)
-        state.groundY = groundY
+        local depth = through and Enum.HighlightDepthMode.AlwaysOnTop or Enum.HighlightDepthMode.Occluded
+        local color = (Options.CoverOutlineColor and Options.CoverOutlineColor.Value) or Color3.fromRGB(130, 205, 255)
+        local lineThick = math.clamp(thickness * 0.012, 0.01, 0.05)   -- SelectionBox 线宽合法区间只有 0.01~0.05
 
         local exclude = { char }
         if Workspace.CurrentCamera then
@@ -35141,6 +35069,7 @@ end)()
             return
         end
 
+        -- 按模型去重（一堵墙很多块砖，只描一个轮廓），记录离自己最近的那块
         local candidates = {}
         for _, part in ipairs(parts) do
             if part:IsA('BasePart')
@@ -35159,36 +35088,31 @@ end)()
             end
         end
 
-        local list = {}
-        for _, item in pairs(candidates) do
-            list[#list + 1] = item
-        end
-        table.sort(list, function(a, b)
-            return a.dist < b.dist
-        end)
-
         local want = {}
-        for i = 1, math.min(#list, maxCount) do
-            local item = list[i]
-            local fade = 1 - math.clamp(item.dist / math.max(range, 1), 0, 1)
-            if fade > 0.04 then
-                item.fade = fade
-                want[item.target] = item
+        local count = 0
+        for target, item in pairs(candidates) do
+            if item.dist <= range then
+                want[target] = item
+                count = count + 1
             end
         end
 
-        -- 迟滞：已经点亮的目标只要还在 0.95 倍半径内就保留，避免移动时闪烁
-        for target, cur in pairs(active) do
-            if not want[target] then
-                local pos = (target:IsA('Model') and target:GetPivot().Position) or target.Position
-                local dist = (pos - root.Position).Magnitude
-                if dist <= range * 0.95 and cur.part then
-                    local fade = 1 - math.clamp(dist / math.max(range, 1), 0, 1)
-                    want[target] = { target = target, part = cur.part, dist = dist, fade = fade }
-                end
+        -- 超过保护上限时只留最近的，避免几百个描边把帧数拖死
+        if count > MAX_TARGETS then
+            local list = {}
+            for _, item in pairs(want) do
+                list[#list + 1] = item
+            end
+            table.sort(list, function(a, b)
+                return a.dist < b.dist
+            end)
+            want = {}
+            for i = 1, MAX_TARGETS do
+                want[list[i].target] = list[i]
             end
         end
 
+        -- 离开范围的直接销毁
         for target, cur in pairs(active) do
             if not want[target] then
                 if cur.hl then pcall(function() cur.hl:Destroy() end) end
@@ -35198,15 +35122,17 @@ end)()
         end
 
         for target, item in pairs(want) do
+            -- 距离渐变：0 距离最实，越靠近边缘越淡，到半径边界正好为 0
+            local t = math.clamp(item.dist / range, 0, 1)
+            local fade = (1 - t) ^ 1.15
+            local alpha = math.clamp(opacity * fade, 0, 1)
+
             local cur = active[target]
             if not cur then
-                cur = { born = os.clock() }
+                cur = {}
                 active[target] = cur
             end
-
             cur.dist = item.dist
-            cur.fade = item.fade
-            cur.target = target
 
             if not cur.hl or not cur.hl.Parent then
                 local hl = Instance.new('Highlight')
@@ -35216,9 +35142,10 @@ end)()
                 hl.Parent = target
                 cur.hl = hl
             end
-            cur.hl.DepthMode = through and Enum.HighlightDepthMode.AlwaysOnTop or Enum.HighlightDepthMode.Occluded
+            cur.hl.DepthMode = depth
+            cur.hl.OutlineColor = color
+            cur.hl.OutlineTransparency = 1 - alpha
 
-            -- 线框层先建好，透明度交给逐帧动画去控制
             if item.part then
                 if not cur.sb or not cur.sb.Parent or cur.part ~= item.part then
                     if cur.sb then pcall(function() cur.sb:Destroy() end) end
@@ -35226,14 +35153,17 @@ end)()
                     sb.Name = 'YZCoverBox'
                     sb.Adornee = item.part
                     sb.SurfaceTransparency = 1
-                    sb.Transparency = 1
-                    sb.Color3 = (Options.CoverOutlineColor and Options.CoverOutlineColor.Value) or Color3.fromRGB(130, 205, 255)
-                    sb.LineThickness = 2
+                    sb.Color3 = color
+                    sb.LineThickness = lineThick
                     sb.AlwaysOnTop = through and true or false
                     sb.Parent = item.part
                     cur.sb = sb
                     cur.part = item.part
                 end
+                cur.sb.Color3 = color
+                cur.sb.LineThickness = lineThick
+                cur.sb.AlwaysOnTop = through and true or false
+                cur.sb.Transparency = (thickness > 1) and (1 - alpha) or 1
             elseif cur.sb then
                 pcall(function() cur.sb:Destroy() end)
                 cur.sb = nil
@@ -35242,194 +35172,56 @@ end)()
         end
     end
 
-    -- 逐帧：推进波纹、按「波纹当前位置」点亮掩体描边
-    local waveTime = 0
-    local wavesVisible = false
-
-    local function updateVisuals(dt)
-        local enabled = Toggles.CoverOutline and Toggles.CoverOutline.Value
-        if not enabled then
-            if wavesVisible then
-                hideWaves()
-                wavesVisible = false
-            end
-            return
-        end
-
-        local char = LP.Character
-        local root = char and char:FindFirstChild('HumanoidRootPart')
-        local groundY = state.groundY
-        if not root or not groundY then
-            if wavesVisible then
-                hideWaves()
-                wavesVisible = false
-            end
-            return
-        end
-
-        local cam = Workspace.CurrentCamera
-        if not cam then return end
-
-        local range = math.max(state.range or 60, 1)
-        local opacity = math.clamp((tonumber(Options.CoverOutlineOpacity and Options.CoverOutlineOpacity.Value) or 100) / 100, 0.05, 1)
-        local thickness = math.clamp(tonumber(Options.CoverOutlineThickness and Options.CoverOutlineThickness.Value) or 2, 1, 6)
-        local waveBright = math.clamp((tonumber(Options.CoverFogOpacity and Options.CoverFogOpacity.Value) or 80) / 100, 0, 1)
-        local speed = math.clamp(tonumber(Options.CoverWaveSpeed and Options.CoverWaveSpeed.Value) or 100, 30, 300) / 100
-        local color = (Options.CoverOutlineColor and Options.CoverOutlineColor.Value) or Color3.fromRGB(130, 205, 255)
-        local through = Toggles.CoverOutlineThroughWall and Toggles.CoverOutlineThroughWall.Value
-
-        waveTime = (waveTime + dt * speed) % 10000
-
-        -- 每道波纹当前半径（缓出扩散：起步快、越往外越慢）
-        local radii = {}
-        local phases = {}
-        for w = 1, MAX_WAVES do
-            local phase = (waveTime / BASE_PERIOD + (w - 1) / MAX_WAVES) % 1
-            phases[w] = phase
-            radii[w] = range * (0.03 + 0.97 * (1 - (1 - phase) ^ 2))
-        end
-
-        -- ===== 脚下蔓延波纹 =====
-        if waveBright > 0.02 then
-            wavesVisible = true
-            local center = Vector3.new(root.Position.X, groundY + 0.07, root.Position.Z)
-            for w = 1, MAX_WAVES do
-                local phase = phases[w]
-                local r = radii[w]
-                -- 亮起 → 向外推进 → 边缘熄灭
-                local alpha = waveBright * math.min(1, phase * 7) * (1 - phase) ^ 1.3
-                local thick = math.max(0.9, thickness * (1 - 0.45 * phase) + 0.35)
-                local waveColor = colorLerp(color, Color3.fromRGB(255, 255, 255), 0.12 * (1 - phase) + 0.10)
-
-                if alpha <= 0.02 then
-                    local row = waveLines[w]
-                    if row then
-                        for _, line in pairs(row) do
-                            pcall(function() line.Visible = false end)
-                        end
-                    end
-                else
-                    local sx, sy, sv = {}, {}, {}
-                    for s = 1, SEG do
-                        local ang = (s - 1) / SEG * math.pi * 2
-                        local wp = center + Vector3.new(math.cos(ang) * r, 0, math.sin(ang) * r)
-                        local sp, onScreen = cam:WorldToViewportPoint(wp)
-                        sx[s], sy[s] = sp.X, sp.Y
-                        sv[s] = onScreen and sp.Z > 0
-                    end
-
-                    for s = 1, SEG do
-                        local line = ensureLine(w, s)
-                        if line then
-                            local j = (s % SEG) + 1
-                            if sv[s] and sv[j] then
-                                line.From = Vector2.new(sx[s], sy[s])
-                                line.To = Vector2.new(sx[j], sy[j])
-                                line.Color = waveColor
-                                line.Thickness = thick
-                                line.Transparency = 1 - alpha
-                                line.Visible = true
-                            else
-                                line.Visible = false
-                            end
-                        end
-                    end
-                end
-            end
-        elseif wavesVisible then
-            hideWaves()
-            wavesVisible = false
-        end
-
-        -- ===== 掩体描边：基础亮度看距离，波纹扫过时点亮 =====
-        local band = range * 0.10
-        for _, cur in pairs(active) do
-            local d = cur.dist or 0
-            local boost = 0
-            for w = 1, MAX_WAVES do
-                local delta = (d - radii[w]) / band
-                if math.abs(delta) < 3 then
-                    local b = math.exp(-delta * delta)
-                    if b > boost then
-                        boost = b
-                    end
-                end
-            end
-
-            local base = cur.fade or 0
-            -- 刚被扫到的掩体做一段 0.22s 的生长淡入，视觉上像「蔓延」到它身上
-            local grow = math.clamp((os.clock() - (cur.born or 0)) / 0.22, 0, 1)
-            local alpha = opacity * (0.10 + 0.90 * base) * (0.42 + 1.10 * boost) * grow
-            alpha = math.clamp(alpha, 0, 1)
-            local cc = colorLerp(color, Color3.fromRGB(255, 255, 255), 0.45 * boost)
-
-            if cur.hl and cur.hl.Parent then
-                cur.hl.OutlineColor = cc
-                cur.hl.OutlineTransparency = 1 - alpha
-                cur.hl.DepthMode = through and Enum.HighlightDepthMode.AlwaysOnTop or Enum.HighlightDepthMode.Occluded
-            end
-            if cur.sb and cur.sb.Parent then
-                cur.sb.Color3 = cc
-                cur.sb.LineThickness = thickness
-                cur.sb.AlwaysOnTop = through and true or false
-                cur.sb.Transparency = (thickness > 1) and (1 - alpha) or 1
-            end
-        end
+    local function refreshSoon()
+        task.defer(function()
+            pcall(scan)
+        end)
     end
 
-    -- 慢循环：自适应间隔扫描（性能差时自动放慢扫描，不影响波纹流畅度）
-    local scanInterval = 0.35
+    -- 自适应间隔扫描：掩体是静止的，没必要每帧重算
+    local interval = 0.2
     task.spawn(function()
         while true do
-            task.wait(scanInterval)
+            task.wait(interval)
             local t0 = os.clock()
             pcall(scan)
             local cost = os.clock() - t0
-            if cost > 0.06 then
-                scanInterval = math.min(1.6, scanInterval + 0.2)
+            if cost > 0.05 then
+                interval = math.min(0.8, interval + 0.1)
             else
-                scanInterval = math.max(0.3, scanInterval - 0.04)
+                interval = math.max(0.18, interval - 0.02)
             end
         end
-    end)
-
-    -- 快循环：隔帧刷新（30fps 足够顺滑，省一半开销）
-    local frameFlip = 0
-    RunService.RenderStepped:Connect(function(dt)
-        frameFlip = frameFlip + 1
-        if frameFlip % 2 ~= 0 then
-            return
-        end
-        pcall(updateVisuals, math.clamp(dt, 0, 0.1) * 2)
     end)
 
     if Toggles.CoverOutline then
         Toggles.CoverOutline:OnChanged(function(v)
             if not v then
-                pcall(clearAll)
+                pcall(clearHighlights)
+            else
+                refreshSoon()
             end
         end)
     end
 
     for _, option in ipairs({
         Options.CoverOutlineRange,
-        Options.CoverOutlineCount,
         Options.CoverOutlineOpacity,
-        Options.CoverOutlineColor,
         Options.CoverOutlineThickness,
-        Options.CoverFogOpacity,
-        Options.CoverWaveSpeed,
+        Options.CoverOutlineColor,
     }) do
         if option and option.OnChanged then
-            option:OnChanged(function()
-                -- 下一次扫描自然生效；半径变化时清掉地面高度缓存重新贴地
-                pcall(function() state.groundY = nil end)
-            end)
+            option:OnChanged(refreshSoon)
         end
     end
 
+    if Toggles.CoverOutlineThroughWall then
+        Toggles.CoverOutlineThroughWall:OnChanged(refreshSoon)
+    end
+
     LP.CharacterAdded:Connect(function()
-        pcall(clearAll)
+        pcall(clearHighlights)
+        refreshSoon()
     end)
 end)()
 
