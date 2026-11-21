@@ -35032,6 +35032,23 @@ end)()
         table.clear(active)
     end
 
+    -- 到部件表面的最短距离（不是到中心）：大墙面贴着站也能算「很近」，
+    -- 墙心很远但边缘就在旁边时不会误判成远处
+    local function surfaceDist(part, pos)
+        local ok, d = pcall(function()
+            local rel = part.CFrame:PointToObjectSpace(pos)
+            local half = part.Size * 0.5
+            local cx = math.clamp(rel.X, -half.X, half.X)
+            local cy = math.clamp(rel.Y, -half.Y, half.Y)
+            local cz = math.clamp(rel.Z, -half.Z, half.Z)
+            return (Vector3.new(cx, cy, cz) - rel).Magnitude
+        end)
+        if ok and d then
+            return d
+        end
+        return (part.Position - pos).Magnitude
+    end
+
     local function scan()
         local enabled = Toggles.CoverOutline and Toggles.CoverOutline.Value
         local char = LP.Character
@@ -35069,21 +35086,33 @@ end)()
             return
         end
 
-        -- 按模型去重（一堵墙很多块砖，只描一个轮廓），记录离自己最近的那块
+        -- 只描真正的掩体：超大部件（整块地面 / 天幕）和扁平大板（地板 / 天花板）直接跳过，
+        -- 否则会被 Highlight 框成一个盖住全图的大方块
         local candidates = {}
         for _, part in ipairs(parts) do
-            if part:IsA('BasePart')
-                and part.Anchored
-                and part.Transparency < 0.95
-                and part.Size.Magnitude > 8 then
-                local model = part:FindFirstAncestorOfClass('Model') or part
-                local dist = (part.Position - root.Position).Magnitude
-                local item = candidates[model]
-                if not item then
-                    candidates[model] = { target = model, part = part, dist = dist }
-                elseif dist < item.dist then
-                    item.part = part
-                    item.dist = dist
+            if part:IsA('BasePart') and part.Anchored and part.Transparency < 0.95 then
+                local sz = part.Size
+                local maxSpan = math.max(sz.X, sz.Y, sz.Z)
+                local skip = false
+
+                if sz.Magnitude < 8 then
+                    skip = true                                   -- 太碎的装饰块
+                elseif maxSpan > 300 then
+                    skip = true                                   -- 跨度超过 300 格的超大部件
+                elseif sz.Y <= 2.5 and sz.X > 30 and sz.Z > 30 then
+                    skip = true                                   -- 扁平大板：地板 / 天花板
+                end
+
+                if not skip then
+                    local model = part:FindFirstAncestorOfClass('Model') or part
+                    local dist = surfaceDist(part, root.Position)
+                    local item = candidates[model]
+                    if not item then
+                        candidates[model] = { target = model, part = part, dist = dist }
+                    elseif dist < item.dist then
+                        item.part = part
+                        item.dist = dist
+                    end
                 end
             end
         end
