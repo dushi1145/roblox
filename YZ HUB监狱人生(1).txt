@@ -35578,6 +35578,480 @@ end)()
     end)
 end)()
 
+-- ====================== 数据卡片（游玩时长 / 击杀 / 死亡） ======================
+-- 视觉页里的一个小卡片：左边头像，右边上行游玩时长、下行击杀与死亡。
+-- 可拖动、可缩放，默认关闭；位置会记到执行器工作区的 YZStatsPos.txt。
+; (function()
+    local PlayersService = game:GetService('Players')
+    local UIS = game:GetService('UserInputService')
+
+    local POS_FILE = 'YZStatsPos.txt'
+    local BASE_W, BASE_H = 246, 88
+
+    local startTime = os.clock()
+    local kills = 0          -- 本地估算计数（游戏没有击杀统计时才用）
+    local deaths = 0
+    local killStat = nil     -- 游戏自带的击杀统计（有就优先用它）
+
+    local gui, card, avatar, line1, line2
+    local scale = 1
+    local dragging, dragStart, startPos
+
+    local function fmtTime(sec)
+        sec = math.max(0, math.floor(sec))
+        if sec < 60 then
+            return sec .. 's'
+        elseif sec < 3600 then
+            return string.format('%dm %ds', math.floor(sec / 60), sec % 60)
+        end
+        return string.format('%dh %dm', math.floor(sec / 3600), math.floor((sec % 3600) / 60))
+    end
+
+    -- 找游戏自带的击杀统计（名字各家不同，模糊匹配）
+    local function findKillStat()
+        local ls = LP:FindFirstChild('leaderstats')
+        if not ls then
+            return nil
+        end
+        for _, v in ipairs(ls:GetChildren()) do
+            if v:IsA('IntValue') or v:IsA('NumberValue') then
+                local n = string.lower(v.Name)
+                if n:find('kill') or n:find('ko') or n:find('frag') or n:find('elim') or v.Name:find('击杀') then
+                    return v
+                end
+            end
+        end
+        return nil
+    end
+
+    local function nearMe(pos, radius)
+        local char = LP.Character
+        local root = char and char:FindFirstChild('HumanoidRootPart')
+        if not root then
+            return false
+        end
+        return (root.Position - pos).Magnitude <= radius
+    end
+
+    -- 没有被游戏统计时的兜底：手里拿着武器、30 格内把人打掉血，且 6 秒内死亡 → 记一次击杀
+    local lastHit = {}
+
+    local function hasTool()
+        local char = LP.Character
+        if not char then
+            return false
+        end
+        for _, c in ipairs(char:GetChildren()) do
+            if c:IsA('Tool') then
+                return true
+            end
+        end
+        return false
+    end
+
+    local function watchPlayer(p)
+        if p == LP then
+            return
+        end
+        local function hook()
+            local char = p.Character
+            local hum = char and char:FindFirstChildOfClass('Humanoid')
+            if not hum then
+                return
+            end
+            local lastHealth = hum.Health
+            hum.HealthChanged:Connect(function(h)
+                if killStat then
+                    return
+                end
+                if h < lastHealth then
+                    local ok, pos = pcall(function()
+                        return hum.RootPart and hum.RootPart.Position
+                    end)
+                    if ok and pos and hasTool() and nearMe(pos, 30) then
+                        lastHit[p] = os.clock()
+                    end
+                end
+                lastHealth = h
+            end)
+            hum.Died:Connect(function()
+                if killStat then
+                    return
+                end
+                local t = lastHit[p]
+                if t and os.clock() - t <= 6 then
+                    kills = kills + 1
+                end
+                lastHit[p] = nil
+            end)
+        end
+        hook()
+        p.CharacterAdded:Connect(function()
+            task.wait(0.3)
+            pcall(hook)
+        end)
+    end
+
+    local function hookSelf()
+        local char = LP.Character
+        local hum = char and char:FindFirstChildOfClass('Humanoid')
+        if not hum then
+            return
+        end
+        hum.Died:Connect(function()
+            deaths = deaths + 1
+        end)
+    end
+
+    local function updateAvatar()
+        local ok, img = pcall(function()
+            return PlayersService:GetUserThumbnailAsync(LP.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size150x150)
+        end)
+        if avatar then
+            avatar.Image = (ok and img) or 'rbxasset://textures/ui/ErrorIcon.png'
+        end
+    end
+
+    local function applyLayout()
+        if not card then
+            return
+        end
+        local s = scale
+        card.Size = UDim2.fromOffset(math.floor(BASE_W * s), math.floor(BASE_H * s))
+        avatar.Size = UDim2.fromOffset(math.floor(56 * s), math.floor(56 * s))
+        avatar.Position = UDim2.fromOffset(math.floor(10 * s), math.floor(16 * s))
+        local corner = avatar:FindFirstChildOfClass('UICorner')
+        if corner then
+            corner.CornerRadius = UDim.new(0, math.floor(12 * s))
+        end
+        line1.Position = UDim2.fromOffset(math.floor(78 * s), math.floor(18 * s))
+        line1.Size = UDim2.new(1, -math.floor(88 * s), 0, math.floor(20 * s))
+        line1.TextSize = math.floor(13 * s)
+        line2.Position = UDim2.fromOffset(math.floor(78 * s), math.floor(48 * s))
+        line2.Size = UDim2.new(1, -math.floor(88 * s), 0, math.floor(22 * s))
+        line2.TextSize = math.floor(15 * s)
+    end
+
+    local function savePos()
+        if not card then
+            return
+        end
+        pcall(function()
+            writefile(POS_FILE, string.format('%d,%d', card.Position.X.Offset, card.Position.Y.Offset))
+        end)
+    end
+
+    local function loadPos()
+        local ok, raw = pcall(function()
+            if isfile and isfile(POS_FILE) then
+                return readfile(POS_FILE)
+            end
+        end)
+        if ok and type(raw) == 'string' then
+            local x, y = string.match(raw, '^%s*(-?%d+)%s*,%s*(-?%d+)%s*$')
+            if x and y then
+                return UDim2.fromOffset(tonumber(x), tonumber(y))
+            end
+        end
+        return nil
+    end
+
+    local function build()
+        if gui and gui.Parent then
+            return
+        end
+
+        gui = Instance.new('ScreenGui')
+        gui.Name = 'YZStatsHUD'
+        gui.ResetOnSpawn = false
+        gui.IgnoreGuiInset = true
+        gui.DisplayOrder = 20
+
+        local host
+        local ok, h = pcall(function()
+            return gethui and gethui()
+        end)
+        if ok and h then
+            host = h
+        else
+            host = LP:FindFirstChild('PlayerGui') or game:GetService('CoreGui')
+        end
+        gui.Parent = host
+
+        card = Instance.new('Frame')
+        card.Name = 'Card'
+        card.BackgroundColor3 = Color3.fromRGB(19, 21, 27)
+        card.BackgroundTransparency = 0.1
+        card.BorderSizePixel = 0
+        card.Active = true
+        card.Position = loadPos() or UDim2.new(0, 24, 0.5, 60)
+        card.Parent = gui
+
+        local corner = Instance.new('UICorner')
+        corner.CornerRadius = UDim.new(0, 14)
+        corner.Parent = card
+        local stroke = Instance.new('UIStroke')
+        stroke.Color = Color3.fromRGB(58, 62, 74)
+        stroke.Thickness = 1
+        stroke.Transparency = 0.25
+        stroke.Parent = card
+
+        avatar = Instance.new('ImageLabel')
+        avatar.Name = 'Avatar'
+        avatar.BackgroundColor3 = Color3.fromRGB(32, 34, 42)
+        avatar.BorderSizePixel = 0
+        avatar.ScaleType = Enum.ScaleType.Crop
+        avatar.Image = ''
+        avatar.Parent = card
+        local avatarCorner = Instance.new('UICorner')
+        avatarCorner.CornerRadius = UDim.new(0, 12)
+        avatarCorner.Parent = avatar
+
+        line1 = Instance.new('TextLabel')
+        line1.BackgroundTransparency = 1
+        line1.Font = Enum.Font.GothamMedium
+        line1.TextXAlignment = Enum.TextXAlignment.Left
+        line1.TextYAlignment = Enum.TextYAlignment.Center
+        line1.TextColor3 = Color3.fromRGB(232, 236, 244)
+        line1.RichText = true
+        line1.Text = '游玩时长  0s'
+        line1.Parent = card
+
+        line2 = Instance.new('TextLabel')
+        line2.BackgroundTransparency = 1
+        line2.Font = Enum.Font.GothamMedium
+        line2.TextXAlignment = Enum.TextXAlignment.Left
+        line2.TextYAlignment = Enum.TextYAlignment.Center
+        line2.TextColor3 = Color3.fromRGB(232, 236, 244)
+        line2.RichText = true
+        line2.Text = '击杀 0    死亡 0'
+        line2.Parent = card
+
+        card.InputBegan:Connect(function(io)
+            if io.UserInputType == Enum.UserInputType.MouseButton1 or io.UserInputType == Enum.UserInputType.Touch then
+                dragging = true
+                dragStart = io.Position
+                startPos = card.Position
+            end
+        end)
+        card.InputEnded:Connect(function(io)
+            if io.UserInputType == Enum.UserInputType.MouseButton1 or io.UserInputType == Enum.UserInputType.Touch then
+                if dragging then
+                    dragging = false
+                    savePos()
+                end
+            end
+        end)
+        UIS.InputChanged:Connect(function(io)
+            if dragging and dragStart and startPos then
+                local delta = io.Position - dragStart
+                card.Position = UDim2.new(
+                    startPos.X.Scale, startPos.X.Offset + delta.X,
+                    startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+            end
+        end)
+
+        updateAvatar()
+        applyLayout()
+    end
+
+    local function refreshText()
+        if not (line1 and line2) then
+            return
+        end
+        local elapsed = os.clock() - startTime
+        line1.Text = string.format('<font color="#98a0ad">游玩时长</font>  %s', fmtTime(elapsed))
+
+        local k = kills
+        if killStat and killStat.Parent then
+            local ok, v = pcall(function()
+                return math.floor(tonumber(killStat.Value) or 0)
+            end)
+            if ok then
+                k = v
+            end
+        end
+
+        line2.Text = string.format('<font color="#98a0ad">击杀</font> %d    <font color="#98a0ad">死亡</font> %d', k, deaths)
+    end
+
+    ----------------------------------------------------------------------
+    -- 界面
+    ----------------------------------------------------------------------
+    local StatsGroup = Tabs.Visuals:AddRightGroupbox('数据卡片')
+
+    Toggles.StatsHUD = StatsGroup:AddToggle('StatsHUD', {
+        Text = '显示数据卡片',
+        Default = false,
+        Tooltip = '显示头像 + 游玩时长 + 击杀 / 死亡；卡片可以用鼠标拖动',
+    })
+    Options.StatsHUDScale = StatsGroup:AddSlider('StatsHUDScale', {
+        Text = '大小', Default = 100, Min = 60, Max = 160, Rounding = 0, Suffix = ' %', Compact = false,
+    })
+    StatsGroup:AddButton({
+        Text = '重置位置',
+        Func = function()
+            if card then
+                card.Position = UDim2.new(0, 24, 0.5, 60)
+                savePos()
+            end
+        end,
+    })
+
+    Toggles.StatsHUD:OnChanged(function(v)
+        if v then
+            pcall(build)
+            if gui then
+                gui.Enabled = true
+                pcall(refreshText)
+            end
+        elseif gui then
+            gui.Enabled = false
+        end
+    end)
+
+    Options.StatsHUDScale:OnChanged(function(v)
+        scale = math.clamp((tonumber(v) or 100) / 100, 0.6, 1.6)
+        pcall(applyLayout)
+    end)
+
+    ----------------------------------------------------------------------
+    -- 数据
+    ----------------------------------------------------------------------
+    killStat = findKillStat()
+    task.delay(3, function()
+        killStat = findKillStat()
+    end)
+
+    pcall(hookSelf)
+    for _, p in ipairs(PlayersService:GetPlayers()) do
+        pcall(watchPlayer, p)
+    end
+    PlayersService.PlayerAdded:Connect(function(p)
+        pcall(watchPlayer, p)
+    end)
+    LP.CharacterAdded:Connect(function()
+        task.wait(0.3)
+        pcall(hookSelf)
+        pcall(updateAvatar)
+    end)
+
+    task.spawn(function()
+        while true do
+            task.wait(0.5)
+            if Toggles.StatsHUD and Toggles.StatsHUD.Value then
+                pcall(refreshText)
+            end
+        end
+    end)
+end)()
+
+-- ====================== 移动相机（镜头平滑延迟） ======================
+-- 原理：在默认相机脚本之后（RenderPriority.Camera + 1）接管一次 Camera.CFrame，
+--       把「镜头位置」用指数平滑慢慢追上真实位置，朝向仍然实时跟手，
+--       所以看起来是镜头慢半拍、人照常在动，而且过渡很顺。
+; (function()
+    local Workspace = game:GetService('Workspace')
+
+    local smoothPos = nil
+    local bound = false
+    local CONN_NAME = 'YZCamLag'
+
+    local function getTau()
+        local v = tonumber(Options.CamLagAmount and Options.CamLagAmount.Value) or 45
+        return math.clamp(v, 0, 100) / 100 * 0.35      -- 0 ~ 0.35 秒的跟随时间常数
+    end
+
+    local function step(dt)
+        local enabled = Toggles.CamLag and Toggles.CamLag.Value
+        local cam = Workspace.CurrentCamera
+        if not enabled or not cam then
+            smoothPos = nil
+            return
+        end
+
+        local target = cam.CFrame
+
+        -- 帧率无关的指数平滑
+        local tau = getTau()
+        if not smoothPos then
+            smoothPos = target.Position
+            return
+        end
+        if tau <= 0.002 then
+            smoothPos = target.Position
+            return
+        end
+
+        local a = 1 - math.exp(-dt / tau)
+        smoothPos = smoothPos:Lerp(target.Position, a)
+
+        -- 传送 / 换图 / 重生时不要拖出一条长线，直接吸附
+        if (smoothPos - target.Position).Magnitude > 80 then
+            smoothPos = target.Position
+        end
+
+        -- 位置用平滑后的，朝向保持即时，保证瞄准不受影响
+        cam.CFrame = CFrame.new(smoothPos) * target.Rotation
+    end
+
+    local function enable()
+        if bound then
+            return
+        end
+        bound = true
+        smoothPos = nil
+        pcall(function()
+            RunService:BindToRenderStep(CONN_NAME, Enum.RenderPriority.Camera.Value + 1, step)
+        end)
+    end
+
+    local function disable()
+        if not bound then
+            return
+        end
+        bound = false
+        smoothPos = nil
+        pcall(function()
+            RunService:UnbindFromRenderStep(CONN_NAME)
+        end)
+    end
+
+    ----------------------------------------------------------------------
+    -- 界面
+    ----------------------------------------------------------------------
+    local CamGroup = Tabs.Visuals:AddLeftGroupbox('移动相机')
+
+    Toggles.CamLag = CamGroup:AddToggle('CamLag', {
+        Text = '启用移动相机',
+        Default = false,
+        Tooltip = '镜头位置比人慢半拍、平滑地追上来，人和准星照常跟手（只拖位置，不影响瞄准）',
+    })
+    Options.CamLagAmount = CamGroup:AddSlider('CamLagAmount', {
+        Text = '延迟强度', Default = 45, Min = 0, Max = 100, Rounding = 0, Suffix = ' %', Compact = false,
+        Tooltip = '越大镜头跟得越慢（0 = 几乎无延迟，100 = 明显拖影感）',
+    })
+
+    Toggles.CamLag:OnChanged(function(v)
+        if v then
+            enable()
+        else
+            disable()
+        end
+    end)
+
+    Options.CamLagAmount:OnChanged(function()
+        -- 每帧读取，这里只需要在关闭状态下清一下残留
+        if not (Toggles.CamLag and Toggles.CamLag.Value) then
+            smoothPos = nil
+        end
+    end)
+
+    LP.CharacterAdded:Connect(function()
+        smoothPos = nil
+    end)
+end)()
+
 -- ====================== CUSTOM VIEWMODEL & SPIN ======================
 do
     local origC0Map = setmetatable({}, { __mode = 'k' })
