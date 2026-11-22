@@ -25110,10 +25110,16 @@ local function updateTargetESP(dt)
             return
         end
 
-        -- 腰间的水平光环：一圈半径不同的同心环叠出「中间亮、两边柔」的发光带
-        local baseR = math.max(hrp.Size.X, hrp.Size.Z) * 0.5 + 0.75
+        -- 从头顶往脚下扫的一圈光环，环下面拖着一串残影（视频里就是这种感觉）
         local bright = math.clamp(brightness / 255, 0, 1)
-        local pulse = 0.97 + 0.03 * math.sin(tick() * 2.2)
+        local baseR = math.max(hrp.Size.X, hrp.Size.Z) * 0.5 + 0.75
+        local head = targetChar:FindFirstChild('Head')
+        local yTop = (head and head.Position.Y + 0.9) or (hrp.Position.Y + 1.7)
+        local yBot = hrp.Position.Y - 2.6
+        if yTop - yBot < 2 then
+            yTop = yBot + 5
+        end
+
         local used = 0
         local alive = true
 
@@ -25140,40 +25146,50 @@ local function updateTargetESP(dt)
             ln.Visible = true
         end
 
-        -- 每一层 = 一个半径偏移 + 一个上下小偏移 + 一个透明度，叠起来就是带厚度和光晕的环
-        local LAYERS = {
-            { dr = -0.36, a = 0.09, dy = 0.11 },
-            { dr = -0.20, a = 0.30, dy = 0.07 },
-            { dr = -0.08, a = 0.68, dy = 0.03 },
-            { dr = 0.00, a = 1.00, dy = 0.00 },
-            { dr = 0.11, a = 0.62, dy = -0.03 },
-            { dr = 0.26, a = 0.28, dy = -0.07 },
-            { dr = 0.44, a = 0.09, dy = -0.11 },
-        }
+        local hx, hz = hrp.Position.X, hrp.Position.Z
 
-        local cy = hrp.Position.Y + 0.1
-        local SEG = 28
-        for _, L in ipairs(LAYERS) do
-            local r = (baseR + L.dr) * pulse
-            local y = cy + L.dy
-            local alpha = bright * L.a * 0.95
-            local col = isRainbow and Color3.fromHSV((tick() * 0.4 + L.dr) % 1, 0.7, 1) or baseCol
+        local function ringAt(y, r, col, alpha, thick, segs)
+            if alpha <= 0.02 then
+                return
+            end
             local first, prev = nil, nil
-            for si = 0, SEG - 1 do
-                local ang = si / SEG * math.pi * 2
-                local pt = Vector3.new(
-                    hrp.Position.X + math.cos(ang) * r,
-                    y,
-                    hrp.Position.Z + math.sin(ang) * r)
+            for si = 0, segs - 1 do
+                local ang = si / segs * math.pi * 2
+                local pt = Vector3.new(hx + math.cos(ang) * r, y, hz + math.sin(ang) * r)
                 if prev then
-                    pushLine(prev, pt, col, alpha, 8)
+                    pushLine(prev, pt, col, alpha, thick)
                 else
                     first = pt
                 end
                 prev = pt
             end
             if prev and first then
-                pushLine(prev, first, col, alpha, 8)
+                pushLine(prev, first, col, alpha, thick)
+            end
+        end
+
+        -- 主环：从头落到脚，一个周期走完立刻回到头顶重来
+        local now = tick()
+        local dur = math.clamp(2.4 / math.max(speed, 0.3), 0.4, 4.5)
+        local u = (now % dur) / dur
+        local cy = yTop + (yBot - yTop) * u
+        local col = isRainbow and Color3.fromHSV((now * 0.5) % 1, 0.7, 1) or baseCol
+        local rr = baseR * (1 + 0.012 * math.sin(now * 3))
+
+        -- 主环本体 + 内外柔光
+        ringAt(cy, rr, col, bright * 1.00, 9, 28)
+        ringAt(cy, rr - 0.17, col, bright * 0.40, 7, 28)
+        ringAt(cy, rr + 0.19, col, bright * 0.40, 7, 28)
+        ringAt(cy, rr + 0.42, col, bright * 0.12, 6, 28)
+
+        -- 残影：主环下面一串越来越淡的环
+        local TRAIL = 10
+        local span = yTop - yBot
+        for k = 1, TRAIL do
+            local yy = cy - span * (k / (TRAIL + 2))
+            if yy > yBot - 1.6 then
+                local f = (1 - k / (TRAIL + 1)) ^ 1.6
+                ringAt(yy, rr * 0.985, col, bright * 0.5 * f, 7, 22)
             end
         end
 
@@ -25213,7 +25229,21 @@ local function updateTargetESP(dt)
             end
             k = k * k * (3 - 2 * k)                 -- smoothstep，两端不生硬
             local scaleMul = 0.84 + 0.34 * k        -- 0.84 ~ 1.18
-            local sz = baseSize * 2.05 * scaleMul
+
+            -- 贴合目标实际大小：离得近时跟着身体一起放大，离得远保留原来的固定大小
+            local userMul = math.clamp(baseSize / 70, 0.3, 2.2)
+            local headP = targetChar:FindFirstChild('Head')
+            local pxH = 0
+            if headP then
+                local hp = headP.Position + Vector3.new(0, 0.55, 0)
+                local fp = rootPart.Position - Vector3.new(0, 2.8, 0)
+                local s1 = Camera:WorldToViewportPoint(hp)
+                local s2 = Camera:WorldToViewportPoint(fp)
+                pxH = math.abs(s1.Y - s2.Y)
+            end
+            local fitSz = pxH * 1.35 * userMul * scaleMul
+            local sz = math.max(baseSize * 2.05 * scaleMul, fitSz)
+            sz = math.clamp(sz, 60, 720)
 
             targetVectorImg.Position = UDim2.new(0, screenPos.X, 0, screenPos.Y)
             targetVectorImg.Size = UDim2.fromOffset(sz, sz)
