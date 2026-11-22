@@ -37176,17 +37176,21 @@ end)()
     end)
 end)()
 
--- ====================== 头顶武器（武器在头顶横着转 + 可隐藏手上武器） ======================
--- 拿在手上的枪会被克隆一份放到头顶，绕竖轴旋转；位置带惯性（像移动相机那种跟手感）。
--- 开启「隐藏手上武器」后，手上的枪只对你隐身（LocalTransparencyModifier），
--- 同时这颗头顶的枪就是弹道的发射点（makeTracer 里读 _G.YZHeadWeaponMuzzle）。
+-- ====================== 头顶武器（整把 Tool 克隆到头顶 + 横着转 + 可隐藏手上武器） ======================
+-- 直接把整个 Tool 克隆一份放进 Workspace，拆掉所有关节 / 脚本 / 特效，
+-- 全部锚定后用 PivotTo 一起搬动 —— 这样枪的模型、网格、贴图、零件全都原样保留。
+-- 开启「隐藏手上武器」后，把手上的 Tool 里每个 Part 的 LocalTransparencyModifier 设成 1，
+-- 只对自己隐身；同时头顶这把枪就是弹道的发射点（makeTracer 读 _G.YZHeadWeaponMuzzle）。
 ; (function()
     local RunService = game:GetService('RunService')
     local Workspace = game:GetService('Workspace')
 
-    local model, visual, lastTool
+    local clone          -- 头顶的那个 Tool 克隆
+    local lastTool       -- 当前对应的原 Tool
+    local hidden         -- 记录被隐藏的原零件（关掉时还原）
     local angle = 0
     local smoothPos = nil
+    local muzzleBack = 1.2
 
     local function currentTool()
         local char = LP.Character
@@ -37201,71 +37205,97 @@ end)()
         return nil
     end
 
-    local function clearVisual()
-        if model then
-            pcall(function()
-                model:Destroy()
-            end)
+    local function setHidden(tool, on)
+        if not tool then
+            return
         end
-        model, visual = nil, nil
-        if lastTool then
-            local h = lastTool:FindFirstChild('Handle')
-            if h then
+        for _, d in ipairs(tool:GetDescendants()) do
+            if d:IsA('BasePart') then
                 pcall(function()
-                    h.LocalTransparencyModifier = 0
+                    d.LocalTransparencyModifier = on and 1 or 0
                 end)
             end
         end
-        lastTool = nil
+    end
+
+    local function clearVisual()
+        if clone then
+            pcall(function()
+                clone:Destroy()
+            end)
+        end
+        if lastTool then
+            setHidden(lastTool, false)
+        end
+        clone, lastTool, hidden = nil, nil, nil
         smoothPos = nil
     end
 
     local function buildVisual(tool)
         clearVisual()
-        local handle = tool:FindFirstChild('Handle')
-        if not handle then
+
+        local ok, c = pcall(function()
+            return tool:Clone()
+        end)
+        if not ok or not c then
             lastTool = tool
             return
         end
+        c.Name = 'YZHeadWeapon'
 
-        local clone = handle:Clone()
-        clone.Name = 'YZHeadWeaponPart'
-        clone.Anchored = true
-        clone.CanCollide = false
-        clone.CanQuery = false
-        clone.CanTouch = false
-        clone.CastShadow = false
-        clone.Transparency = 0
-        clone.Massless = true
-        -- 关键：把克隆体上所有关节 / 约束全部拆掉。
-        -- 只要还留着一根焊到手上的 Weld/ManualWeld/Snap，旋转这个锚定克隆体时
-        -- 物理引擎就会顺着约束把人一起拖着转（就是「人转起来了」的原因）。
-        for _, d in ipairs(clone:GetDescendants()) do
-            if d:IsA('JointInstance') or d:IsA('WeldConstraint')
-                or d:IsA('Constraint') or d:IsA('ParticleEmitter')
-                or d:IsA('Light') or d:IsA('Trail') or d:IsA('Sound') then
+        -- 拆关节 / 脚本 / 特效，全部锚定
+        for _, d in ipairs(c:GetDescendants()) do
+            if d:IsA('JointInstance') or d:IsA('WeldConstraint') or d:IsA('Constraint') then
                 pcall(function()
                     d:Destroy()
                 end)
+            elseif d:IsA('Script') or d:IsA('LocalScript') or d:IsA('ModuleScript') then
+                pcall(function()
+                    d:Destroy()
+                end)
+            elseif d:IsA('ParticleEmitter') or d:IsA('Light') or d:IsA('Trail') or d:IsA('Sound') then
+                pcall(function()
+                    d:Destroy()
+                end)
+            elseif d:IsA('BasePart') then
+                d.Anchored = true
+                d.CanCollide = false
+                d.CanQuery = false
+                d.CanTouch = false
+                d.CastShadow = false
+                d.Massless = true
             end
         end
 
-        model = Instance.new('Model')
-        model.Name = 'YZHeadWeapon'
-        model.Parent = Workspace
-        clone.Parent = model
-        visual = clone
+        local handle = c:FindFirstChild('Handle')
+        if handle and handle:IsA('BasePart') then
+            c.PrimaryPart = handle
+            -- 枪口：Handle 前方一点，按整把枪沿 Z 的半长往外推
+            local minZ = 0
+            for _, d in ipairs(c:GetDescendants()) do
+                if d:IsA('BasePart') then
+                    local z = handle.CFrame:ToObjectSpace(d.CFrame).Position.Z - d.Size.Z * 0.5
+                    if z < minZ then minZ = z end
+                end
+            end
+            muzzleBack = math.max(0.8, math.abs(minZ) + 0.45)
+        end
+
+        c.Parent = Workspace
+        clone = c
         lastTool = tool
     end
 
-    -- 弹道起点：头顶那把枪的枪口
+    -- 弹道起点：头顶这把枪的枪口
     _G.YZHeadWeaponMuzzle = function()
-        if not visual or not visual.Parent then
+        if not clone or not clone.Parent then
             return nil
         end
-        local cf = visual.CFrame
-        local len = (visual.Size.Z > 0.2) and (visual.Size.Z * 0.5) or 0.6
-        return cf.Position + cf.LookVector * (len + 0.35)
+        local handle = clone.PrimaryPart or clone:FindFirstChild('Handle')
+        if not handle then
+            return nil
+        end
+        return (handle.CFrame * CFrame.new(0, 0, -muzzleBack)).Position
     end
 
     ----------------------------------------------------------------------
@@ -37276,16 +37306,21 @@ end)()
     Toggles.HeadWeapon = WXGroupHeadWeapon:AddToggle('HeadWeapon', {
         Text = '启用头顶武器',
         Default = false,
-        Tooltip = '把手上的枪克隆一份放到头顶横着转；只有你自己看得见',
+        Tooltip = '把手上的枪整把复制到头顶横着转；只有你自己看得见',
     })
     Options.HeadWeaponSpin = WXGroupHeadWeapon:AddSlider('HeadWeaponSpin', {
         Text = '旋转速度（度/秒）', Default = 90, Min = 0, Max = 720, Rounding = 0, Compact = false,
         Tooltip = '0 = 不转，90 = 4 秒一圈，360 = 1 秒一圈',
     })
+    Toggles.HeadWeaponLag = WXGroupHeadWeapon:AddToggle('HeadWeaponLag', {
+        Text = '跟手惯性（延迟）',
+        Default = true,
+        Tooltip = '开：跟着头走会慢半拍、跑动时甩出去；关：死死钉在头顶，瞬间跟随',
+    })
     Toggles.HeadWeaponHide = WXGroupHeadWeapon:AddToggle('HeadWeaponHide', {
         Text = '隐藏手上武器',
         Default = true,
-        Tooltip = '手上那把枪只对你隐身，别人还能看到；弹道改从头顶的枪出来',
+        Tooltip = '手上那把枪的每个零件只对你隐身，别人还能看到；弹道改从头顶的枪出来',
     })
 
     Toggles.HeadWeapon:OnChanged(function(v)
@@ -37296,14 +37331,8 @@ end)()
 
     if Toggles.HeadWeaponHide and Toggles.HeadWeaponHide.OnChanged then
         Toggles.HeadWeaponHide:OnChanged(function(v)
-            local tool = lastTool
-            if tool then
-                local h = tool:FindFirstChild('Handle')
-                if h then
-                    pcall(function()
-                        h.LocalTransparencyModifier = v and 1 or 0
-                    end)
-                end
+            if lastTool then
+                setHidden(lastTool, v)
             end
         end)
     end
@@ -37315,7 +37344,7 @@ end)()
     RunService.RenderStepped:Connect(function(dt)
         dt = math.clamp(dt, 0, 0.1)
         if not (Toggles.HeadWeapon and Toggles.HeadWeapon.Value) then
-            if model then
+            if clone then
                 pcall(clearVisual)
             end
             return
@@ -37323,16 +37352,16 @@ end)()
 
         local tool = currentTool()
         if not tool then
-            if model then
+            if clone then
                 pcall(clearVisual)
             end
             return
         end
 
-        if tool ~= lastTool or not visual or not visual.Parent then
+        if tool ~= lastTool or not clone or not clone.Parent then
             pcall(buildVisual, tool)
         end
-        if not visual or not visual.Parent then
+        if not clone or not clone.Parent then
             return
         end
 
@@ -37343,37 +37372,37 @@ end)()
             return
         end
 
-        -- 手上隐藏
+        -- 手上隐藏（默认开）
         local hide = not (Toggles.HeadWeaponHide and Toggles.HeadWeaponHide.Value == false)
-        local handle = tool:FindFirstChild('Handle')
-        if handle then
-            local want = hide and 1 or 0
-            if handle.LocalTransparencyModifier ~= want then
-                pcall(function()
-                    handle.LocalTransparencyModifier = want
-                end)
-            end
-        end
+        setHidden(tool, hide)
 
         local spin = tonumber(Options.HeadWeaponSpin and Options.HeadWeaponSpin.Value) or 90
         angle = (angle + dt * spin) % 360
 
-        -- 头顶位置 + 惯性跟随（这就是「移动相机的感觉」）
         local targetPos = head.CFrame.Position + Vector3.new(0, 2.35, 0)
-        if smoothPos == nil then
-            smoothPos = targetPos
+        local lag = not (Toggles.HeadWeaponLag and Toggles.HeadWeaponLag.Value == false)
+
+        local lean = CFrame.new()
+        if lag then
+            if smoothPos == nil then
+                smoothPos = targetPos
+            else
+                smoothPos = smoothPos:Lerp(targetPos, 1 - math.exp(-dt * 11))
+            end
+            local vel = root.AssemblyLinearVelocity
+            local lat = vel:Dot(root.CFrame.RightVector)
+            local fwd = vel:Dot(root.CFrame.LookVector)
+            lean = CFrame.Angles(0, 0, math.clamp(-lat * 0.0035, -0.28, 0.28))
+                * CFrame.Angles(math.clamp(fwd * 0.0028, -0.22, 0.22), 0, 0)
         else
-            smoothPos = smoothPos:Lerp(targetPos, 1 - math.exp(-dt * 11))
+            smoothPos = targetPos
         end
 
-        -- 跑动 / 横移时往反方向稍微倾斜，像挂在头顶被甩起来
-        local vel = root.AssemblyLinearVelocity
-        local lat = vel:Dot(root.CFrame.RightVector)
-        local fwd = vel:Dot(root.CFrame.LookVector)
-        local lean = CFrame.Angles(0, 0, math.clamp(-lat * 0.0035, -0.28, 0.28))
-            * CFrame.Angles(math.clamp(fwd * 0.0028, -0.22, 0.22), 0, 0)
-
-        visual.CFrame = CFrame.new(smoothPos) * lean * CFrame.Angles(0, math.rad(angle), 0)
+        local base = CFrame.new(smoothPos) * lean * CFrame.Angles(0, math.rad(angle), 0)
+        -- PivotTo 的 pivot 就是 PrimaryPart（Handle）的 CFrame，直接摆过去即可
+        if clone.PrimaryPart or clone:FindFirstChildWhichIsA('BasePart', true) then
+            clone:PivotTo(base)
+        end
     end)
 end)()
 
