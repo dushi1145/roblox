@@ -21933,15 +21933,16 @@ Toggles.VoidAntiTargetLock = VoidDep:AddToggle('VoidAntiTargetLock', {
     ----------------------------------------------------------------------
     -- 界面
     ----------------------------------------------------------------------
-    local ArrestGroup = Void_Tab:AddLeftGroupbox('自动抓捕')
+    Void_Tab:AddDivider()
+    Void_Tab:AddLabel('自动抓捕（选人 → 传过去 → 发包逮捕 → 传回原位）')
 
-    Toggles.AutoArrest = ArrestGroup:AddToggle('AutoArrest', {
+    Toggles.AutoArrest = Void_Tab:AddToggle('AutoArrest', {
         Text = '自动抓捕',
         Default = false,
         Tooltip = '选中目标后自动传过去、发逮捕包，抓完飞回原位；走的是 ArrestPlayer 远程，不需要手铐',
     })
 
-    Options.AutoArrestTarget = WXDrop(ArrestGroup, 'AutoArrestTarget', {
+    Options.AutoArrestTarget = WXDrop(Void_Tab, 'AutoArrestTarget', {
         Values = { 'None', '最近的人' },
         Default = 1,
         Multi = false,
@@ -21949,21 +21950,21 @@ Toggles.VoidAntiTargetLock = VoidDep:AddToggle('VoidAntiTargetLock', {
         Tooltip = '选一个具体玩家，或者用「最近的人」自动挑离你最近的那个',
     })
 
-    Options.AutoArrestRange = ArrestGroup:AddSlider('AutoArrestRange', {
+    Options.AutoArrestRange = Void_Tab:AddSlider('AutoArrestRange', {
         Text = '贴身距离', Default = 2, Min = 1, Max = 10, Rounding = 0, Compact = false,
     })
 
-    Options.AutoArrestDelay = ArrestGroup:AddSlider('AutoArrestDelay', {
+    Options.AutoArrestDelay = Void_Tab:AddSlider('AutoArrestDelay', {
         Text = '抓捕间隔（秒）', Default = 0.25, Min = 0.05, Max = 2, Rounding = 2, Compact = false,
     })
 
-    Toggles.AutoArrestReturn = ArrestGroup:AddToggle('AutoArrestReturn', {
+    Toggles.AutoArrestReturn = Void_Tab:AddToggle('AutoArrestReturn', {
         Text = '抓完回到原位',
         Default = true,
         Tooltip = '每次逮捕包发出去以后，把自己传回开启自动抓捕时站的位置',
     })
 
-    ArrestGroup:AddButton({
+    Void_Tab:AddButton({
         Text = '刷新玩家列表',
         Func = function()
             if refreshList then
@@ -21972,7 +21973,7 @@ Toggles.VoidAntiTargetLock = VoidDep:AddToggle('VoidAntiTargetLock', {
         end,
     })
 
-    ArrestGroup:AddButton({
+    Void_Tab:AddButton({
         Text = '立刻抓一次',
         Func = function()
             local p = pickTarget()
@@ -37259,10 +37260,11 @@ end)()
 
     local texRain, texSnow
     local rig, rainE, snowE
+    local snowRig
 
     -- 清掉上一次执行留下的天气实体，避免重复叠加
     for _, obj in ipairs(Workspace:GetChildren()) do
-        if obj.Name == 'YZWeather' then
+        if obj.Name == 'YZWeather' or obj.Name == 'YZSnowRig' then
             pcall(function() obj:Destroy() end)
         end
     end
@@ -37306,7 +37308,7 @@ end)()
         if not (texRain and texSnow) then
             ensureTextures()
         end
-        if rig and rig.Parent then
+        if rig and rig.Parent and snowRig and snowRig.Parent then
             return
         end
 
@@ -37349,31 +37351,44 @@ end)()
         rainE.Color = ColorSequence.new(Color3.fromRGB(188, 214, 255))
         rainE.Parent = rig
 
+        -- 雪：单独一块更小更低的发射面，雪花才够密、才落得到你眼前
+        snowRig = Instance.new('Part')
+        snowRig.Name = 'YZSnowRig'
+        snowRig.Size = Vector3.new(110, 2, 110)
+        snowRig.Transparency = 1
+        snowRig.Anchored = true
+        snowRig.CanCollide = false
+        snowRig.CanQuery = false
+        snowRig.CanTouch = false
+        snowRig.CastShadow = false
+        snowRig.Massless = true
+        snowRig.Parent = Workspace
+
         -- 雪：柔和圆点，慢慢飘、左右晃
         snowE = Instance.new('ParticleEmitter')
         snowE.Name = 'YZSnow'
         snowE.Texture = texSnow
         snowE.EmissionDirection = Enum.NormalId.Bottom
-        snowE.Lifetime = NumberRange.new(6, 9)
-        snowE.Speed = NumberRange.new(4, 7)
+        snowE.Lifetime = NumberRange.new(5, 8)
+        snowE.Speed = NumberRange.new(6, 10)
         snowE.SpreadAngle = Vector2.new(12, 12)
-        snowE.Acceleration = Vector3.new(1.6, -1.4, 0.8)
-        snowE.Drag = 0.5
+        snowE.Acceleration = Vector3.new(1.2, -6, 0.5)
+        snowE.Drag = 0.3
         snowE.LightInfluence = 0.1
         snowE.LightEmission = 0.15
         snowE.RotSpeed = NumberRange.new(-45, 45)
         snowE.Rate = 0
         snowE.Enabled = false
         snowE.Size = NumberSequence.new({
-            NumberSequenceKeypoint.new(0, 0.55),
-            NumberSequenceKeypoint.new(1, 0.4),
+            NumberSequenceKeypoint.new(0, 0.62),
+            NumberSequenceKeypoint.new(1, 0.45),
         })
         snowE.Transparency = NumberSequence.new({
             NumberSequenceKeypoint.new(0, 0.15),
             NumberSequenceKeypoint.new(1, 0.55),
         })
         snowE.Color = ColorSequence.new(Color3.fromRGB(248, 250, 255))
-        snowE.Parent = rig
+        snowE.Parent = snowRig
     end
 
     -- 掩体检测：头顶 40 格内有遮挡 → 判定为室内，暂停降水
@@ -37404,7 +37419,7 @@ end)()
             snowE.Enabled = false
             snowE.Rate = 0
         else
-            snowE.Rate = math.floor(180 * snowPower) * mul
+            snowE.Rate = math.floor(260 * snowPower) * mul
             snowE.Enabled = true
             rainE.Enabled = false
             rainE.Rate = 0
@@ -37459,6 +37474,10 @@ end)()
         end
         local h = math.clamp(tonumber(Options.WeatherHeight and Options.WeatherHeight.Value) or 26, 8, 80)
         rig.CFrame = CFrame.new(cam.CFrame.Position + Vector3.new(0, h, 0))
+        -- 雪用更矮的发射面：雪花才来得及落到你眼前，飞起来也不会“什么都没有”
+        if snowRig and snowRig.Parent then
+            snowRig.CFrame = CFrame.new(cam.CFrame.Position + Vector3.new(0, h * 0.55, 0))
+        end
     end)
 
     task.defer(function()
@@ -37478,16 +37497,507 @@ end)()
                 if rig then
                     ex[#ex + 1] = rig
                 end
+                if snowRig then
+                    ex[#ex + 1] = snowRig
+                end
                 for _, pl in ipairs(Players:GetPlayers()) do
                     if pl.Character then
                         ex[#ex + 1] = pl.Character
                     end
                 end
                 shelterParams.FilterDescendantsInstances = ex
-                -- 从头顶往上 60 格：有东西挡住就算在屋里/掩体下
-                local hit = Workspace:Raycast(root.Position + Vector3.new(0, 3, 0), Vector3.new(0, 60, 0), shelterParams)
-                sheltered = (hit ~= nil)
+                -- 空中（飞 / 跳 / 掉）一律不算被遮挡，否则飞过屋顶就会整个停雪
+                local hum = char:FindFirstChildOfClass('Humanoid')
+                if hum and hum.FloorMaterial == Enum.Material.Air then
+                    sheltered = false
+                else
+                    -- 从头顶往上 60 格：有东西挡住就算在屋里/掩体下
+                    local hit = Workspace:Raycast(root.Position + Vector3.new(0, 3, 0), Vector3.new(0, 60, 0), shelterParams)
+                    sheltered = (hit ~= nil)
+                end
                 pcall(apply)
+            end
+        end
+    end)
+end)()
+
+-- ====================== 按键显示（移植 MC Cheat HUD 的 keystrokes） ======================
+-- 布局和动画照着 Neverlose 那份 MC Cheat HUD 搬的：
+--   底色 46,52,46 / 18% 透明；按下时填充从正中间按 e = 1-(1-p)^2 胀到铺满整格，
+--   进度按 0.09 秒进、0.16 秒出；空格画一根横杠；LMB / RMB 各占一半；
+--   最后一行是左右键 CPS（每秒点击次数）。
+; (function()
+    local UIS = game:GetService('UserInputService')
+    local RunService = game:GetService('RunService')
+
+    local KS = 40                       -- 单键边长（源码 40，缩放交给 UIScale）
+    local GAP = 6
+    local W = KS * 3 + GAP * 2
+    local H_MOVE = KS * 2 + GAP
+    local PRESS_IN = 0.09
+    local PRESS_OUT = 0.16
+
+    local BG_COLOR = Color3.fromRGB(46, 52, 46)
+    local BG_TRANS = 1 - 46 / 255
+    local TXT_TRANS = 1 - 244 / 255
+    local FILL_A_MIN = 0.32
+    local FILL_A_MAX = 0.90
+    local DEFAULT_COLOR = Color3.fromRGB(255, 205, 253)
+
+    local gui, root, scaleObj
+    local applyScale, applyColor, layout
+    local anim = {}          -- 参与动画的填充块：{ fill, p, target, corner }
+    local rec = {}           -- 名称 → 动画记录
+    local fW, fA, fS, fD, fSpace, fLMB, fRMB, fCPS
+    local cpsLblL, cpsLblR
+    local clicks = { {}, {} }
+    local cpsValue = { 0, 0 }
+
+    local function addCorner(obj, r)
+        local c = Instance.new('UICorner')
+        c.CornerRadius = UDim.new(0, r)
+        c.Parent = obj
+        return c
+    end
+
+    local function keyColor()
+        local c = Options.KeyDisplayColor and Options.KeyDisplayColor.Value
+        if typeof(c) == 'Color3' then
+            return c
+        end
+        return DEFAULT_COLOR
+    end
+
+    -- 一个键：底板 + 居中的填充块（填充块从 0 长到 1 就是「从中间铺满」）
+    local function mkKey(w, h, id)
+        local f = Instance.new('Frame')
+        f.BackgroundColor3 = BG_COLOR
+        f.BackgroundTransparency = BG_TRANS
+        f.BorderSizePixel = 0
+        f.ClipsDescendants = true
+        addCorner(f, 9)
+
+        local fill = Instance.new('Frame')
+        fill.Name = 'Fill'
+        fill.AnchorPoint = Vector2.new(0.5, 0.5)
+        fill.Position = UDim2.fromScale(0.5, 0.5)
+        fill.Size = UDim2.fromScale(0, 0)
+        fill.BackgroundColor3 = keyColor()
+        fill.BackgroundTransparency = 1
+        fill.BorderSizePixel = 0
+        fill.Visible = false
+        fill.ZIndex = 2
+        local fc = addCorner(fill, 8)
+        fill.Parent = f
+
+        local item = { fill = fill, p = 0, target = 0, corner = fc }
+        anim[#anim + 1] = item
+        if id then
+            rec[id] = item
+        end
+        return f, fill
+    end
+
+    local function mkLabel(parent, text, size)
+        local l = Instance.new('TextLabel')
+        l.BackgroundTransparency = 1
+        l.Size = UDim2.fromScale(1, 1)
+        l.Font = Enum.Font.GothamBold
+        l.TextSize = size or 16
+        l.TextColor3 = Color3.fromRGB(255, 255, 255)
+        l.TextTransparency = TXT_TRANS
+        l.Text = text
+        l.ZIndex = 3
+        l.Parent = parent
+        return l
+    end
+
+    local function build()
+        if gui and gui.Parent then
+            return
+        end
+
+        gui = Instance.new('ScreenGui')
+        gui.Name = 'YZKeyDisplay'
+        gui.ResetOnSpawn = false
+        gui.IgnoreGuiInset = true
+        gui.DisplayOrder = 9400
+        gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+        pcall(function()
+            if syn and syn.protect_gui then
+                syn.protect_gui(gui)
+                gui.Parent = game:GetService('CoreGui')
+            elseif gethui then
+                gui.Parent = gethui()
+            else
+                gui.Parent = game:GetService('CoreGui')
+            end
+        end)
+        if not gui.Parent then
+            gui.Parent = LP:WaitForChild('PlayerGui')
+        end
+
+        root = Instance.new('Frame')
+        root.Name = 'Keys'
+        root.AnchorPoint = Vector2.new(1, 0.5)
+        root.Position = UDim2.new(1, -40, 0.5, 0)
+        root.Size = UDim2.fromOffset(W, 0)
+        root.BackgroundTransparency = 1
+        root.Parent = gui
+
+        scaleObj = Instance.new('UIScale')
+        scaleObj.Scale = 1
+        scaleObj.Parent = root
+
+        -- 移动键
+        fW = mkKey(KS, KS, 'W')
+        mkLabel(fW, 'W', 16)
+        fW.Parent = root
+
+        fA = mkKey(KS, KS, 'A')
+        mkLabel(fA, 'A', 16)
+        fA.Parent = root
+
+        fS = mkKey(KS, KS, 'S')
+        mkLabel(fS, 'S', 16)
+        fS.Parent = root
+
+        fD = mkKey(KS, KS, 'D')
+        mkLabel(fD, 'D', 16)
+        fD.Parent = root
+
+        -- 空格：底板 + 一根横杠（源码里就是 w*0.58、2px 厚的一条）
+        fSpace = mkKey(W, KS, 'Space')
+        local bar = Instance.new('Frame')
+        bar.AnchorPoint = Vector2.new(0.5, 0.5)
+        bar.Position = UDim2.fromScale(0.5, 0.5)
+        bar.Size = UDim2.fromOffset(math.floor(W * 0.58), 2)
+        bar.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        bar.BackgroundTransparency = 1 - 232 / 255
+        bar.BorderSizePixel = 0
+        bar.ZIndex = 3
+        addCorner(bar, 1)
+        bar.Parent = fSpace
+        fSpace.Parent = root
+
+        -- 鼠标：左右各一半
+        local halfW = math.floor((W - GAP) / 2)
+        fLMB = mkKey(halfW, KS, 'LMB')
+        mkLabel(fLMB, 'LMB', 12)
+        fLMB.Parent = root
+
+        fRMB = mkKey(halfW, KS, 'RMB')
+        mkLabel(fRMB, 'RMB', 12)
+        fRMB.Parent = root
+
+        -- CPS 行：中间一根细竖线，左右各一个数字
+        fCPS = Instance.new('Frame')
+        fCPS.BackgroundColor3 = BG_COLOR
+        fCPS.BackgroundTransparency = BG_TRANS
+        fCPS.BorderSizePixel = 0
+        addCorner(fCPS, 9)
+        fCPS.Parent = root
+
+        local divider = Instance.new('Frame')
+        divider.AnchorPoint = Vector2.new(0.5, 0.5)
+        divider.Position = UDim2.fromScale(0.5, 0.5)
+        divider.Size = UDim2.new(0, 2, 0.56, 0)
+        divider.BackgroundColor3 = Color3.fromRGB(238, 242, 238)
+        divider.BackgroundTransparency = 1 - 150 / 255
+        divider.BorderSizePixel = 0
+        divider.ZIndex = 3
+        divider.Parent = fCPS
+
+        local function mkCpsNum(xScale)
+            local l = Instance.new('TextLabel')
+            l.BackgroundTransparency = 1
+            l.AnchorPoint = Vector2.new(0.5, 0.5)
+            l.Position = UDim2.fromScale(xScale, 0.5)
+            l.Size = UDim2.fromOffset(60, KS)
+            l.Font = Enum.Font.GothamBold
+            l.TextSize = 16
+            l.TextColor3 = Color3.fromRGB(240, 244, 240)
+            l.TextTransparency = 1 - 236 / 255
+            l.Text = '0'
+            l.ZIndex = 3
+            l.Parent = fCPS
+            return l
+        end
+        cpsLblL = mkCpsNum(0.25)
+        cpsLblR = mkCpsNum(0.75)
+
+        applyScale()
+        layout()
+
+        pcall(function()
+            if _G.YZAddMovable then
+                _G.YZAddMovable({ name = '按键显示', root = root })
+            end
+        end)
+    end
+
+    local function shown(t)
+        return not (t and t.Value == false)
+    end
+
+    layout = function()
+        if not root then
+            return
+        end
+        local y = 0
+        local any = false
+
+        if shown(Toggles.KeyDisplayMove) then
+            fW.Position = UDim2.fromOffset(math.floor((W - KS) / 2), y)
+            fA.Position = UDim2.fromOffset(0, y + KS + GAP)
+            fS.Position = UDim2.fromOffset(KS + GAP, y + KS + GAP)
+            fD.Position = UDim2.fromOffset((KS + GAP) * 2, y + KS + GAP)
+            fW.Visible, fA.Visible, fS.Visible, fD.Visible = true, true, true, true
+            y = y + H_MOVE + GAP
+            any = true
+        else
+            fW.Visible, fA.Visible, fS.Visible, fD.Visible = false, false, false, false
+        end
+
+        if shown(Toggles.KeyDisplayJump) then
+            fSpace.Visible = true
+            fSpace.Position = UDim2.fromOffset(0, y)
+            fSpace.Size = UDim2.fromOffset(W, KS)
+            y = y + KS + GAP
+            any = true
+        else
+            fSpace.Visible = false
+        end
+
+        if shown(Toggles.KeyDisplayMouse) then
+            local halfW = math.floor((W - GAP) / 2)
+            fLMB.Visible, fRMB.Visible = true, true
+            fLMB.Position = UDim2.fromOffset(0, y)
+            fRMB.Position = UDim2.fromOffset(halfW + GAP, y)
+            fLMB.Size = UDim2.fromOffset(halfW, KS)
+            fRMB.Size = UDim2.fromOffset(halfW, KS)
+            y = y + KS + GAP
+            any = true
+        else
+            fLMB.Visible, fRMB.Visible = false, false
+        end
+
+        if shown(Toggles.KeyDisplayCps) then
+            fCPS.Visible = true
+            fCPS.Position = UDim2.fromOffset(0, y)
+            fCPS.Size = UDim2.fromOffset(W, KS)
+            y = y + KS + GAP
+            any = true
+        else
+            fCPS.Visible = false
+        end
+
+        root.Size = UDim2.fromOffset(W, any and math.max(0, y - GAP) or 0)
+    end
+
+    applyScale = function()
+        if scaleObj then
+            local s = math.clamp((tonumber(Options.KeyDisplayScale and Options.KeyDisplayScale.Value) or 100) / 100, 0.5, 1.8)
+            scaleObj.Scale = s
+        end
+    end
+
+    applyColor = function()
+        local c = keyColor()
+        for _, item in ipairs(anim) do
+            item.fill.BackgroundColor3 = c
+        end
+    end
+
+    -- 每帧推进进度：进得快、出得慢一点，跟源码一样的 e 曲线
+    local function step(dt)
+        for _, item in ipairs(anim) do
+            local t = item.target
+            if t > item.p then
+                item.p = math.min(1, item.p + dt / PRESS_IN)
+            elseif t < item.p then
+                item.p = math.max(0, item.p - dt / PRESS_OUT)
+            end
+
+            local p = item.p
+            if p <= 0.002 then
+                if item.fill.Visible then
+                    item.fill.Visible = false
+                end
+            else
+                local e = 1 - (1 - p) * (1 - p)
+                item.fill.Visible = true
+                item.fill.Size = UDim2.fromScale(e, e)
+                item.fill.BackgroundTransparency = 1 - (FILL_A_MIN + (FILL_A_MAX - FILL_A_MIN) * e)
+                item.corner.CornerRadius = UDim.new(0, math.max(2, math.floor(9 * e + 0.5)))
+            end
+        end
+    end
+
+    local function cpsStep(now)
+        for i = 1, 2 do
+            local h = clicks[i]
+            local cut = now - 1
+            local w = 0
+            for k = 1, #h do
+                if h[k] >= cut then
+                    w = w + 1
+                    h[w] = h[k]
+                end
+            end
+            for k = #h, w + 1, -1 do
+                h[k] = nil
+            end
+            cpsValue[i] = w
+        end
+        if cpsLblL and cpsLblL.Parent then
+            cpsLblL.Text = tostring(cpsValue[1])
+        end
+        if cpsLblR and cpsLblR.Parent then
+            cpsLblR.Text = tostring(cpsValue[2])
+        end
+    end
+
+    local function hit(id)
+        return rec[id]
+    end
+
+    ----------------------------------------------------------------------
+    -- 界面
+    ----------------------------------------------------------------------
+    WXGroupKeys = Tabs.Visuals:AddRightGroupbox('按键显示')
+
+    Toggles.KeyDisplay = WXGroupKeys:AddToggle('KeyDisplay', {
+        Text = '显示按键',
+        Default = false,
+        Tooltip = '右下角一组键位；按下时颜色从中间铺满，松开缩回并淡出',
+    })
+    Options.KeyDisplayScale = WXGroupKeys:AddSlider('KeyDisplayScale', {
+        Text = '大小', Default = 100, Min = 50, Max = 160, Rounding = 0, Suffix = ' %', Compact = false,
+    })
+    do
+        local L = WXGroupKeys:AddLabel('填充颜色')
+        L:AddColorPicker('KeyDisplayColor', { Default = DEFAULT_COLOR, Title = '填充颜色' })
+    end
+    Toggles.KeyDisplayMove = WXGroupKeys:AddToggle('KeyDisplayMove', { Text = '移动键 W A S D', Default = true })
+    Toggles.KeyDisplayJump = WXGroupKeys:AddToggle('KeyDisplayJump', { Text = '空格键', Default = true })
+    Toggles.KeyDisplayMouse = WXGroupKeys:AddToggle('KeyDisplayMouse', { Text = '鼠标左 / 右键', Default = true })
+    Toggles.KeyDisplayCps = WXGroupKeys:AddToggle('KeyDisplayCps', { Text = 'CPS 行', Default = true })
+
+    Toggles.KeyDisplay:OnChanged(function(v)
+        if v then
+            pcall(build)
+            if gui then
+                gui.Enabled = true
+            end
+        elseif gui then
+            gui.Enabled = false
+            for _, item in ipairs(anim) do
+                item.p, item.target = 0, 0
+                item.fill.Visible = false
+            end
+        end
+    end)
+
+    for _, t in ipairs({ Toggles.KeyDisplayMove, Toggles.KeyDisplayJump, Toggles.KeyDisplayMouse, Toggles.KeyDisplayCps }) do
+        if t and t.OnChanged then
+            t:OnChanged(function()
+                pcall(layout)
+            end)
+        end
+    end
+
+    if Options.KeyDisplayScale and Options.KeyDisplayScale.OnChanged then
+        Options.KeyDisplayScale:OnChanged(function()
+            pcall(applyScale)
+        end)
+    end
+    if Options.KeyDisplayColor and Options.KeyDisplayColor.OnChanged then
+        Options.KeyDisplayColor:OnChanged(function()
+            pcall(applyColor)
+        end)
+    end
+
+    local function press(id, isCps)
+        local item = hit(id)
+        if not item then
+            return
+        end
+        if isCps and item.target == 0 then
+            local h = clicks[id == 'LMB' and 1 or 2]
+            h[#h + 1] = tick()
+        end
+        item.target = 1
+    end
+
+    local function release(id)
+        local item = hit(id)
+        if item then
+            item.target = 0
+        end
+    end
+
+    local KEYMAP = {
+        [Enum.KeyCode.W] = 'W',
+        [Enum.KeyCode.A] = 'A',
+        [Enum.KeyCode.S] = 'S',
+        [Enum.KeyCode.D] = 'D',
+        [Enum.KeyCode.Space] = 'Space',
+        [Enum.UserInputType.MouseButton1] = 'LMB',
+        [Enum.UserInputType.MouseButton2] = 'RMB',
+    }
+
+    UIS.InputBegan:Connect(function(input, gp)
+        if not (Toggles.KeyDisplay and Toggles.KeyDisplay.Value) then
+            return
+        end
+        local id = KEYMAP[input.KeyCode] or KEYMAP[input.UserInputType]
+        if not id then
+            return
+        end
+        -- 键盘键在聊天框里打字时不亮；鼠标键照常亮
+        if gp and input.KeyCode ~= Enum.KeyCode.Unknown then
+            return
+        end
+        press(id, id == 'LMB' or id == 'RMB')
+    end)
+
+    UIS.InputEnded:Connect(function(input)
+        if not (Toggles.KeyDisplay and Toggles.KeyDisplay.Value) then
+            return
+        end
+        local id = KEYMAP[input.KeyCode] or KEYMAP[input.UserInputType]
+        if id then
+            release(id)
+        end
+    end)
+
+    if UIS.WindowFocusReleased then
+        UIS.WindowFocusReleased:Connect(function()
+            for _, item in ipairs(anim) do
+                item.target = 0
+            end
+        end)
+    end
+
+    local cpsClock = 0
+    RunService.RenderStepped:Connect(function(dt)
+        if not (Toggles.KeyDisplay and Toggles.KeyDisplay.Value) then
+            return
+        end
+        step(dt)
+        cpsClock = cpsClock + dt
+        if cpsClock >= 0.1 then
+            cpsClock = 0
+            cpsStep(tick())
+        end
+    end)
+
+    task.defer(function()
+        if Toggles.KeyDisplay and Toggles.KeyDisplay.Value then
+            pcall(build)
+            if gui then
+                gui.Enabled = true
             end
         end
     end)
