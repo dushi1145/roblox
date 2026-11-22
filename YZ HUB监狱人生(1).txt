@@ -21730,330 +21730,6 @@ Toggles.VoidAntiTargetLock = VoidDep:AddToggle('VoidAntiTargetLock', {
     Tooltip = '快速微抖动位置，破坏敌方自瞄预测'
 })
 
--- ====================== 自动抓捕（选人 → 传过去 → 发包逮捕 → 传回原位） ======================
--- 跟「逮捕光环」走同一条路：ReplicatedStorage.Remotes.ArrestPlayer:InvokeServer(目标, 1)。
--- 不模拟点击、不需要手铐，直接发逮捕包；抓完自动飞回开启功能时站的位置。
-; (function()
-    local PlayersService = game:GetService('Players')
-    local ReplicatedStorage = game:GetService('ReplicatedStorage')
-
-    local savedCF = nil      -- 开启时记下的位置（抓完回原位用）
-    local lastNotice = -99
-    local arrestRemote = nil
-
-    local refreshList
-    local alreadyCuffed
-
-    local function notify(msg)
-        if os.clock() - lastNotice < 2 then
-            return
-        end
-        lastNotice = os.clock()
-        pcall(function()
-            Library:Notify({ Title = '自动抓捕', Description = msg, Time = 4 })
-        end)
-    end
-
-    -- 找逮捕远程：优先 Remotes.ArrestPlayer（和逮捕光环同一个），找不到就在 ReplicatedStorage 里按名字扫
-    local function getArrestRemote()
-        if arrestRemote and arrestRemote.Parent then
-            return arrestRemote
-        end
-        local remotes = ReplicatedStorage:FindFirstChild('Remotes')
-        if remotes then
-            local r = remotes:FindFirstChild('ArrestPlayer')
-            if r and (r:IsA('RemoteFunction') or r:IsA('RemoteEvent')) then
-                arrestRemote = r
-                return r
-            end
-        end
-        local ok, list = pcall(function()
-            return ReplicatedStorage:GetDescendants()
-        end)
-        if ok then
-            for _, d in ipairs(list) do
-                if d:IsA('RemoteFunction') or d:IsA('RemoteEvent') then
-                    local n = string.lower(d.Name)
-                    if n:find('arrest', 1, true) or n:find('cuff', 1, true) or n:find('拘捕', 1, true) then
-                        arrestRemote = d
-                        return d
-                    end
-                end
-            end
-        end
-        return nil
-    end
-
-    local function aliveRoot(p)
-        local ch = p and p.Character
-        if not ch then
-            return nil
-        end
-        local hum = ch:FindFirstChildOfClass('Humanoid')
-        if not hum or hum.Health <= 0 then
-            return nil
-        end
-        return ch:FindFirstChild('HumanoidRootPart') or ch:FindFirstChild('UpperTorso')
-    end
-
-    local function pickTarget()
-        local pick = Options.AutoArrestTarget and Options.AutoArrestTarget.Value
-        local myChar = LP.Character
-        local myRoot = myChar and myChar:FindFirstChild('HumanoidRootPart')
-        if pick == '最近的人' then
-            local best, bestD = nil, math.huge
-            for _, p in ipairs(PlayersService:GetPlayers()) do
-                if p ~= LP and not (alreadyCuffed and alreadyCuffed(p)) then
-                    local r = aliveRoot(p)
-                    if r and myRoot then
-                        local d = (r.Position - myRoot.Position).Magnitude
-                        if d < bestD then
-                            bestD, best = d, p
-                        end
-                    end
-                end
-            end
-            return best
-        end
-        if type(pick) ~= 'string' or pick == '' or pick == 'None' then
-            return nil
-        end
-        for _, p in ipairs(PlayersService:GetPlayers()) do
-            if p ~= LP and p.Name == pick then
-                return p
-            end
-        end
-        return nil
-    end
-
-    local function teleportNextTo(p, range)
-        local myChar = LP.Character
-        local myRoot = myChar and myChar:FindFirstChild('HumanoidRootPart')
-        local tRoot = aliveRoot(p)
-        if not (myRoot and tRoot) then
-            return false
-        end
-        -- 站在目标正前方 range 格，正面朝向对方（抓人一般要正对着）
-        local dest = tRoot.Position + tRoot.CFrame.LookVector * range
-        local ok = pcall(function()
-            myChar:PivotTo(CFrame.lookAt(dest, tRoot.Position))
-        end)
-        return ok
-    end
-
-    -- 目标已经被抓了就别再发了
-    alreadyCuffed = function(p)
-        local ch = p and p.Character
-        if not ch then
-            return false
-        end
-        for _, k in ipairs({ 'Cuffed', 'IsCuffed', 'Handcuffed', 'Restrained', 'Arrested' }) do
-            local ok, v = pcall(function()
-                return ch:GetAttribute(k)
-            end)
-            if ok and v then
-                return true
-            end
-        end
-        return false
-    end
-
-    local function waitArrested(p, timeout)
-        local t0 = os.clock()
-        while os.clock() - t0 < timeout do
-            if alreadyCuffed(p) then
-                return true
-            end
-            local ch = p.Character
-            if not ch then
-                return true          -- 人没了 / 被抓走了
-            end
-            task.wait(0.1)
-        end
-        return false
-    end
-
-    local function arrestOnce()
-        local p = pickTarget()
-        if not p then
-            notify('还没选目标')
-            return false
-        end
-        if alreadyCuffed(p) then
-            notify(p.Name .. ' 已经被抓了')
-            return false
-        end
-        local remote = getArrestRemote()
-        if not remote then
-            notify('这个服找不到 ArrestPlayer 远程，自动抓捕用不了')
-            return false
-        end
-
-        local range = tonumber(Options.AutoArrestRange and Options.AutoArrestRange.Value) or 2
-        if not teleportNextTo(p, range) then
-            notify('站不到目标旁边，抓不了')
-            return false
-        end
-        -- 等一帧让位置同步上去，再发包（有些服会校验距离）
-        task.wait(0.08)
-
-        -- 发包（InvokeServer 正常情况下立即返回；万一服务器不回就 1.5 秒后放弃）
-        local done = false
-        task.spawn(function()
-            pcall(function()
-                if remote:IsA('RemoteEvent') then
-                    remote:FireServer(p, 1)
-                else
-                    remote:InvokeServer(p, 1)
-                end
-            end)
-            done = true
-        end)
-        local t0 = os.clock()
-        while not done and (os.clock() - t0) < 1.5 do
-            task.wait(0.05)
-        end
-
-        -- 等服务器确认：目标真的进去了才算成功，成功才飞回原位
-        local vwait = tonumber(Options.AutoArrestVerify and Options.AutoArrestVerify.Value) or 2.5
-        local ok = waitArrested(p, math.clamp(vwait, 0.5, 6))
-
-        if ok then
-            local back = not (Toggles.AutoArrestReturn and Toggles.AutoArrestReturn.Value == false)
-            if back and savedCF then
-                local ch = LP.Character
-                if ch then
-                    pcall(function()
-                        ch:PivotTo(savedCF)
-                    end)
-                end
-            end
-            notify('已逮捕 ' .. p.Name)
-        else
-            notify('没抓到 ' .. p.Name .. '（可能不是可逮捕目标），留在原地')
-        end
-        return ok
-    end
-
-    ----------------------------------------------------------------------
-    -- 界面
-    ----------------------------------------------------------------------
-    Void_Tab:AddDivider()
-
-    Toggles.AutoArrest = Void_Tab:AddToggle('AutoArrest', {
-        Text = '自动抓捕',
-        Default = false,
-        Tooltip = '选中目标后自动传过去、发逮捕包，抓完飞回原位；走的是 ArrestPlayer 远程，不需要手铐',
-    })
-
-    Options.AutoArrestTarget = WXDrop(Void_Tab, 'AutoArrestTarget', {
-        Values = { 'None', '最近的人' },
-        Default = 1,
-        Multi = false,
-        Text = '抓捕目标',
-        Tooltip = '选一个具体玩家，或者用「最近的人」自动挑离你最近的那个',
-    })
-
-    Options.AutoArrestRange = Void_Tab:AddSlider('AutoArrestRange', {
-        Text = '贴身距离', Default = 2, Min = 1, Max = 10, Rounding = 0, Compact = false,
-    })
-
-    Options.AutoArrestVerify = Void_Tab:AddSlider('AutoArrestVerify', {
-        Text = '确认等待（秒）', Default = 2.5, Min = 0.5, Max = 6, Rounding = 1, Compact = false,
-        Tooltip = '发包后等服务器确认的时间；确认到目标真的被抓了才飞回原位',
-    })
-
-    Toggles.AutoArrestReturn = Void_Tab:AddToggle('AutoArrestReturn', {
-        Text = '抓完回到原位',
-        Default = true,
-        Tooltip = '每次逮捕包发出去以后，把自己传回开启自动抓捕时站的位置',
-    })
-
-    Void_Tab:AddButton({
-        Text = '刷新玩家列表',
-        Func = function()
-            if refreshList then
-                refreshList()
-            end
-        end,
-    })
-
-    Void_Tab:AddButton({
-        Text = '立刻抓一次',
-        Func = function()
-            local p = pickTarget()
-            if not p then
-                notify('还没选目标')
-                return
-            end
-            if not getArrestRemote() then
-                notify('这个服找不到 ArrestPlayer 远程')
-                return
-            end
-            task.spawn(function()
-                pcall(arrestOnce)
-            end)
-        end,
-    })
-
-    ----------------------------------------------------------------------
-    -- 逻辑
-    ----------------------------------------------------------------------
-    refreshList = function()
-        local prev = Options.AutoArrestTarget and Options.AutoArrestTarget.Value
-        local list = { 'None', '最近的人' }
-        local names = {}
-        for _, p in ipairs(PlayersService:GetPlayers()) do
-            if p ~= LP then
-                table.insert(names, p.Name)
-            end
-        end
-        table.sort(names)
-        for _, n in ipairs(names) do
-            table.insert(list, n)
-        end
-        if Options.AutoArrestTarget then
-            pcall(function()
-                Options.AutoArrestTarget:SetValues(list)
-                if prev and prev ~= '' and table.find(list, prev) then
-                    Options.AutoArrestTarget:SetValue(prev)
-                end
-            end)
-        end
-    end
-
-    pcall(refreshList)
-    PlayersService.PlayerAdded:Connect(function()
-        task.delay(1, function()
-            pcall(refreshList)
-        end)
-    end)
-    PlayersService.PlayerRemoving:Connect(function()
-        task.delay(0.5, function()
-            pcall(refreshList)
-        end)
-    end)
-
-    Toggles.AutoArrest:OnChanged(function(v)
-        if v then
-            local ch = LP.Character
-            local ok, cf = pcall(function()
-                return ch and ch:GetPivot()
-            end)
-            savedCF = (ok and cf) or nil
-
-            if not getArrestRemote() then
-                notify('这个服找不到 ArrestPlayer 远程，抓捕可能无效')
-            end
-
-            -- 只抓一次，不循环传送
-            task.spawn(function()
-                pcall(arrestOnce)
-            end)
-        end
-    end)
-end)()
-
 -- ====================== VISUALS ======================
 
 -- Left Column 1: Player & Target ESP
@@ -23915,7 +23591,7 @@ do
 end
 
 -- Arrest Aura
-local ArrestPlayer = ReplicatedStorage:WaitForChild('Remotes'):WaitForChild('ArrestPlayer')
+-- 逮捕光环 / 自动抓捕都已删除，这个远程不再需要（原来的 WaitForChild 在缺远程的服会卡住加载）
 local ARREST_RANGE = 7.5
 
 local function isArrestable(player)
@@ -25348,9 +25024,6 @@ RunService.RenderStepped:Connect(function(dt)
         if hasGun then
             updateCrosshair()
         end
-    end
-    if Toggles.ArrestAura and Toggles.ArrestAura.Value then
-        updateArrestRange()
     end
     targetPartCache = (Toggles.SilentAim.Value or Toggles.RageBot.Value or (Toggles.TargetESP and Toggles.TargetESP.Value) or (Toggles.TargetHUD and Toggles.TargetHUD.Value)) and FindNearestTarget() or nil
     updateTargetESP(dt)
@@ -37069,6 +36742,17 @@ end)()
         return '丝滑'
     end
 
+    -- 披风挂点：贴着后背，另外叠加用户自定义的 XYZ 偏移
+    local function capeAnchor(torso)
+        local ox = tonumber(Options.CapeOffsetX and Options.CapeOffsetX.Value) or 0
+        local oy = tonumber(Options.CapeOffsetY and Options.CapeOffsetY.Value) or 0
+        local oz = tonumber(Options.CapeOffsetZ and Options.CapeOffsetZ.Value) or 0
+        return torso.CFrame * CFrame.new(
+            ox,
+            torso.Size.Y * 0.34 + oy,
+            torso.Size.Z * 0.72 + oz)
+    end
+
     local function notify(msg)
         pcall(function()
             Library:Notify({ Title = '披风', Description = msg, Time = 4 })
@@ -37169,6 +36853,7 @@ end)()
         part.BottomSurface = Enum.SurfaceType.Smooth
         part.Color = color
         part.Transparency = 0
+        part:SetAttribute('YZSlotH', slotH)
         part.Parent = capeModel
 
         if imageAsset ~= '' then
@@ -37231,15 +36916,22 @@ end)()
 
         local torsoWidth = math.clamp(torso.Size.X * 1.05, 1.4, 3.2)
         local capeLen = 2.6
-        local slotH = capeLen / total
-        local partH = slotH * 1.42      -- 上下多叠 42%，弯到任何角度都不会露出缝
+        -- 多段时总长 = (total-1)*slotH + 1.42*slotH，反推出 slotH，丝滑和硬板长度才一致
+        local slotH, partH
+        if total > 1 then
+            slotH = capeLen / (total - 1 + 1.42)
+            partH = slotH * 1.42
+        else
+            slotH = capeLen
+            partH = capeLen
+        end
 
         for i = 1, total do
             segments[i] = makeSegment(i, total, torsoWidth, slotH, partH, capeLen, color)
         end
 
         -- 先摆到身后，避免第一帧出现在世界原点
-        local baseCF = torso.CFrame * CFrame.new(0, torso.Size.Y * 0.34, torso.Size.Z * 0.78)
+        local baseCF = capeAnchor(torso)
         for i, seg in ipairs(segments) do
             seg.CFrame = baseCF * CFrame.new(0, -slotH * (i - 0.5), 0)
         end
@@ -37277,7 +36969,7 @@ end)()
         local targetSide = math.clamp(-lat / 38, -1, 1) * math.rad(28)
 
         local total = #segments
-        local slotH = segments[1].Size.Y / 1.42
+        local slotH = segments[1]:GetAttribute('YZSlotH') or (segments[1].Size.Y / 1.42)
 
         -- 弹簧参数：超绝布料更软、阻尼更小（会过冲，像真布）；硬板硬但也会动
         local stiff, damp
@@ -37327,11 +37019,11 @@ end)()
         end
 
         -- 背后是 +Z（角色前方是 -Z）；再往外挪一点，避免摆动时插进身体
-        local cf = torso.CFrame * CFrame.new(0, torso.Size.Y * 0.34, torso.Size.Z * 0.78)
+        local cf = capeAnchor(torso)
 
         for i, seg in ipairs(segments) do
             -- 角度只取负值（负 = 朝身后）：往后摆不会插进身体
-            local back = -(math.rad(1.2) + (dynBack[i] or 0))
+            local back = -(math.rad(0.5) + (dynBack[i] or 0))
             local side = dynSide[i] or 0
             cf = cf * CFrame.Angles(back, 0, side)
             seg.CFrame = cf * CFrame.new(0, -seg.Size.Y / 2, 0)
@@ -37365,7 +37057,19 @@ end)()
     })
     Options.CapeSegments = WXGroupCape:AddSlider('CapeSegments', {
         Text = '布料段数', Default = 6, Min = 3, Max = 8, Rounding = 0, Compact = false,
-        Tooltip = '段数越多摆动越细，6 段是「丝滑」和性能的平衡点',
+        Tooltip = '段数越多摆动越细，6 段是「丝滑」和性能的平衡点；硬板模式忽略',
+    })
+    Options.CapeOffsetX = WXGroupCape:AddSlider('CapeOffsetX', {
+        Text = '位置 X（左右）', Default = 0, Min = -2, Max = 2, Rounding = 2, Compact = false,
+        Tooltip = '在默认挂点上左右挪，0 = 正中',
+    })
+    Options.CapeOffsetY = WXGroupCape:AddSlider('CapeOffsetY', {
+        Text = '位置 Y（上下）', Default = 0, Min = -2, Max = 2, Rounding = 2, Compact = false,
+        Tooltip = '挂点高低；调小往下（更贴腰），调大往上（更贴肩）',
+    })
+    Options.CapeOffsetZ = WXGroupCape:AddSlider('CapeOffsetZ', {
+        Text = '位置 Z（前后）', Default = 0, Min = -2, Max = 2, Rounding = 2, Compact = false,
+        Tooltip = '往负数调更贴背，正数会往身后挪',
     })
     Toggles.CapeTint = WXGroupCape:AddToggle('CapeTint', {
         Text = '披风上色',
@@ -37821,7 +37525,7 @@ end)()
                 addCorner(sh, 11 + d)
                 local st = Instance.new('UIStroke')
                 st.Color = Color3.new(0, 0, 0)
-                st.Thickness = 1
+                st.Thickness = 2
                 st.Transparency = 1 - al
                 st.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
                 st.Parent = sh
