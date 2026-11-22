@@ -22182,6 +22182,10 @@ Toggles.TargetHUDAttach = TargetHUD_Tab:AddToggle('TargetHUDAttach', {
     Tooltip = '卡片跟着目标走、贴在人物右侧，并按距离自动缩放（远处不会太小、近处不会太大）；开启后手动拖动不生效',
 })
 
+Options.TargetHUDShadowDensity = TargetHUD_Tab:AddSlider('TargetHUDShadowDensity', {
+    Text = '阴影浓度', Default = 60, Min = 0, Max = 100, Rounding = 0, Suffix = ' %', Compact = false,
+    Tooltip = '卡片下方投影的浓度，0 = 几乎没有',
+})
 Toggles.TargetHUDShadowOn = TargetHUD_Tab:AddToggle('TargetHUDShadowOn', {
     Text = '卡片阴影',
     Default = true,
@@ -24584,7 +24588,7 @@ for j = 1, GHOST_COUNT do
 end
 
 -- 扫描模式：3D 圆环贴着身体上下扫，拖影连成筒状把人整个包住
-WXScan = { segs = 20, trail = 14, sweep = 3.6, lines = {}, used = 0 }
+WXScan = { segs = 20, trail = 18, sweep = 3.6, lines = {}, used = 0 }
 
 function WXScanHide()
     for i = 1, WXScan.used do
@@ -24620,8 +24624,8 @@ function WXScanPos(t, sweepT)
     local cyc = sweepT * 2
     local u = (t % cyc) / cyc
     local tri = (u < 0.5) and (u * 2) or (2 - u * 2)
-    local v = math.clamp((tri - 0.5) * 1.9 + 0.5, 0, 1)
-    return v * v * (3 - 2 * v)
+    -- 全程匀速，只在折返点平滑过渡，没有任何停顿
+    return tri * tri * (3 - 2 * tri)
 end
 
 local function hideAllTargetESP()
@@ -24770,12 +24774,12 @@ local function updateTargetESP(dt)
 
         -- 拖影：一串密排的圆环，线画粗、透明度压很低，叠起来就是一条连续的渐变
         for k = 1, WXScan.trail do
-            local p = WXScanPos(now - (k - 1) * 0.02, sweepT)
+            local p = WXScanPos(now - (k - 1) * 0.016, sweepT)
             local y = yBottom + (yTop - yBottom) * p
 
             local isHead = (k == 1)
-            local fade = (1 - (k - 1) / WXScan.trail) ^ 1.15
-            local alpha = isHead and (bright * 0.95) or (bright * fade * 0.26)
+            local fade = (1 - (k - 1) / WXScan.trail) ^ 0.7
+            local alpha = isHead and (bright * 0.95) or (bright * fade * 0.2)
             local thick = isHead and 2.6 or 3.2
             local col = isRainbow
                 and Color3.fromHSV((tick() * 0.5 + k * 0.02) % 1, 0.75, 1)
@@ -33611,16 +33615,16 @@ end
     local SHADOW_LAYERS = 40
     local shadowLayers = {}
     for i = 1, SHADOW_LAYERS do
-        local pad = i * 0.40
+        local pad = i * 0.55
         local layer = Instance.new('Frame')
         layer.BorderSizePixel = 0
         layer.BackgroundColor3 = Color3.new(0, 0, 0)
         layer.ZIndex = 1
         layer.Size = UDim2.new(1, pad * 2, 1, pad * 2)
-        layer.Position = UDim2.fromOffset(-pad, -pad + 2)
+        layer.Position = UDim2.fromOffset(-pad, -pad + 4)
         addCorner(layer, 16 + pad * 0.8)
         layer.Parent = shadowHolder
-        local alpha = 0.04 * (1 - (i - 1) / (SHADOW_LAYERS - 1))
+        local alpha = 0.07 * (1 - (i - 1) / (SHADOW_LAYERS - 1))
         shadowLayers[i] = { Frame = layer, Base = 1 - alpha }
     end
 
@@ -33943,7 +33947,7 @@ end
         shadowSpreadNow = math.clamp((tonumber(Options.TargetHUDShadow and Options.TargetHUDShadow.Value) or 80) / 100, 0, 1)
         local factor = 0.55 + 0.90 * shadowSpreadNow
         for i, layer in ipairs(shadowLayers) do
-            local pad = i * 0.40 * factor
+            local pad = i * 0.55 * factor
             layer.Frame.Size = UDim2.new(1, pad * 2, 1, pad * 2)
             layer.Frame.Position = UDim2.fromOffset(-pad, -pad + 2)
             local cc = layer.Frame:FindFirstChildOfClass('UICorner')
@@ -34240,8 +34244,9 @@ end
             edgeFrame.Visible = alpha > 0.02
             edgeStroke.Transparency = themeDarkNow and 1 or (1 - (0.65 * alpha))
             if shadowHolder.Visible then
+                local dens = math.clamp((tonumber(Options.TargetHUDShadowDensity and Options.TargetHUDShadowDensity.Value) or 60) / 100, 0, 1)
                 for _, layer in ipairs(shadowLayers) do
-                    layer.Frame.BackgroundTransparency = 1 - ((1 - layer.Base) * alpha)
+                    layer.Frame.BackgroundTransparency = 1 - ((1 - layer.Base) * alpha * dens)
                 end
             end
         end)
@@ -35978,12 +35983,25 @@ end)()
         return string.format('%dh %dm', math.floor(sec / 3600), math.floor((sec % 3600) / 60))
     end
 
-    -- 找游戏自带的击杀统计（名字各家不同，模糊匹配）
+    -- 找游戏自带的击杀统计：可以手动指定名字，也可以自动模糊匹配
     local function findKillStat()
+        local pick = (Options.KillStatName and Options.KillStatName.Value) or '自动'
+        if pick == '本地估算' then
+            return nil
+        end
         local ls = LP:FindFirstChild('leaderstats')
         if not ls then
             return nil
         end
+
+        if pick ~= '自动' then
+            local v = ls:FindFirstChild(pick)
+            if v and (v:IsA('IntValue') or v:IsA('NumberValue')) then
+                return v
+            end
+            return nil
+        end
+
         for _, v in ipairs(ls:GetChildren()) do
             if v:IsA('IntValue') or v:IsA('NumberValue') then
                 local n = string.lower(v.Name)
@@ -35993,6 +36011,25 @@ end)()
             end
         end
         return nil
+    end
+
+    -- 谁是离死者最近的人（用来排掉“别人杀的也算我头上”）
+    local function closestIsMe(pos)
+        local myRoot = LP.Character and LP.Character:FindFirstChild('HumanoidRootPart')
+        if not myRoot then
+            return false
+        end
+        local best, bestD = nil, math.huge
+        for _, pl in ipairs(Players:GetPlayers()) do
+            local root = pl.Character and pl.Character:FindFirstChild('HumanoidRootPart')
+            if root then
+                local d = (root.Position - pos).Magnitude
+                if d < bestD then
+                    bestD, best = d, pl
+                end
+            end
+        end
+        return best == LP
     end
 
     local function nearMe(pos, radius)
@@ -36050,8 +36087,14 @@ end)()
                     return
                 end
                 local t = lastHit[p]
-                if t and os.clock() - t <= 6 then
-                    kills = kills + 1
+                if t and os.clock() - t <= 5 then
+                    local ok, pos = pcall(function()
+                        return hum.RootPart and hum.RootPart.Position
+                    end)
+                    -- 只有“最后打掉血 + 5 秒内死亡 + 自己是离尸体最近的人”才记一次
+                    if ok and pos and closestIsMe(pos) then
+                        kills = kills + 1
+                    end
                 end
                 lastHit[p] = nil
             end)
@@ -36256,6 +36299,13 @@ end)()
         Default = false,
         Tooltip = '显示头像 + 游玩时长 + 击杀 / 死亡；卡片可以用鼠标拖动',
     })
+    Options.KillStatName = WXDrop(WXGroupStats, 'KillStatName', {
+        Values = { '自动', '本地估算', 'Kills', 'KOs', 'KO', '击杀', '击杀数', 'Kills（击杀）', 'Frags', 'Eliminations' },
+        Default = 1,
+        Multi = false,
+        Text = '击杀来源',
+        Tooltip = '自动 = 在 leaderstats 里找名字像击杀的项；本地估算 = 靠“打掉血 + 旁边没人抢”推算（可能偏差）；也可以直接指定统计名',
+    })
     Options.StatsHUDScale = WXGroupStats:AddSlider('StatsHUDScale', {
         Text = '大小', Default = 100, Min = 60, Max = 160, Rounding = 0, Suffix = ' %', Compact = false,
     })
@@ -36293,6 +36343,12 @@ end)()
     task.delay(3, function()
         killStat = findKillStat()
     end)
+    if Options.KillStatName and Options.KillStatName.OnChanged then
+        Options.KillStatName:OnChanged(function()
+            killStat = findKillStat()
+            pcall(refreshText)
+        end)
+    end
 
     pcall(hookSelf)
     for _, p in ipairs(PlayersService:GetPlayers()) do
@@ -36314,119 +36370,6 @@ end)()
                 pcall(refreshText)
             end
         end
-    end)
-end)()
-
--- ====================== 移动相机（镜头平滑延迟） ======================
--- 原理：在默认相机脚本之后（RenderPriority.Camera + 1）接管一次 Camera.CFrame，
---       把「镜头位置」用指数平滑慢慢追上真实位置，朝向仍然实时跟手，
---       所以看起来是镜头慢半拍、人照常在动，而且过渡很顺。
-; (function()
-    local Workspace = game:GetService('Workspace')
-
-    local smoothPos = nil
-    local bound = false
-    local CONN_NAME = 'YZCamLag'
-
-    local function getTau()
-        local v = tonumber(Options.CamLagAmount and Options.CamLagAmount.Value) or 45
-        return math.clamp(v, 0, 100) / 100 * 0.35      -- 0 ~ 0.35 秒的跟随时间常数
-    end
-
-    local function step(dt)
-        local enabled = Toggles.CamLag and Toggles.CamLag.Value
-        local cam = Workspace.CurrentCamera
-        if not enabled or not cam then
-            smoothPos = nil
-            return
-        end
-
-        local target = cam.CFrame
-
-        -- 帧率无关的指数平滑
-        local tau = getTau()
-        if not smoothPos then
-            smoothPos = target.Position
-            return
-        end
-        if tau <= 0.002 then
-            smoothPos = target.Position
-            return
-        end
-
-        local a = 1 - math.exp(-dt / tau)
-        smoothPos = smoothPos:Lerp(target.Position, a)
-
-        -- 传送 / 换图 / 重生时不要拖出一条长线，直接吸附
-        if (smoothPos - target.Position).Magnitude > 80 then
-            smoothPos = target.Position
-        end
-
-        -- 限制最大偏移：左右平移时镜头只轻微滞后，人始终留在画面中央附近（不会被甩出去）
-        local off = smoothPos - target.Position
-        local maxOff = 0.8 + (tonumber(Options.CamLagAmount and Options.CamLagAmount.Value) or 45) / 100 * 1.4
-        if off.Magnitude > maxOff then
-            smoothPos = target.Position + off.Unit * maxOff
-        end
-
-        -- 位置用平滑后的，朝向保持即时，保证瞄准不受影响
-        cam.CFrame = CFrame.new(smoothPos) * target.Rotation
-    end
-
-    local function enable()
-        if bound then
-            return
-        end
-        bound = true
-        smoothPos = nil
-        pcall(function()
-            RunService:BindToRenderStep(CONN_NAME, Enum.RenderPriority.Camera.Value + 1, step)
-        end)
-    end
-
-    local function disable()
-        if not bound then
-            return
-        end
-        bound = false
-        smoothPos = nil
-        pcall(function()
-            RunService:UnbindFromRenderStep(CONN_NAME)
-        end)
-    end
-
-    ----------------------------------------------------------------------
-    -- 界面
-    ----------------------------------------------------------------------
-    WXGroupCam = Tabs.Visuals:AddLeftGroupbox('移动相机')
-
-    Toggles.CamLag = WXGroupCam:AddToggle('CamLag', {
-        Text = '启用移动相机',
-        Default = false,
-        Tooltip = '镜头位置比人慢半拍、平滑地追上来，人和准星照常跟手（只拖位置，不影响瞄准）',
-    })
-    Options.CamLagAmount = WXGroupCam:AddSlider('CamLagAmount', {
-        Text = '延迟强度', Default = 45, Min = 0, Max = 100, Rounding = 0, Suffix = ' %', Compact = false,
-        Tooltip = '越大镜头跟得越慢（0 = 几乎无延迟，100 = 明显拖影感）',
-    })
-
-    Toggles.CamLag:OnChanged(function(v)
-        if v then
-            enable()
-        else
-            disable()
-        end
-    end)
-
-    Options.CamLagAmount:OnChanged(function()
-        -- 每帧读取，这里只需要在关闭状态下清一下残留
-        if not (Toggles.CamLag and Toggles.CamLag.Value) then
-            smoothPos = nil
-        end
-    end)
-
-    LP.CharacterAdded:Connect(function()
-        smoothPos = nil
     end)
 end)()
 
@@ -36881,8 +36824,8 @@ end)()
         rainE.Rate = 0
         rainE.Enabled = false
         rainE.Size = NumberSequence.new({
-            NumberSequenceKeypoint.new(0, 0.85),
-            NumberSequenceKeypoint.new(1, 0.7),
+            NumberSequenceKeypoint.new(0, 0.5),
+            NumberSequenceKeypoint.new(1, 0.4),
         })
         rainE.Transparency = NumberSequence.new({
             NumberSequenceKeypoint.new(0, 0.5),
@@ -36924,7 +36867,8 @@ end)()
 
     local function apply()
         local kind = Options.WeatherKind and Options.WeatherKind.Value or '关闭'
-        local power = math.clamp((tonumber(Options.WeatherPower and Options.WeatherPower.Value) or 60) / 100, 0.05, 1)
+        local rainPower = math.clamp((tonumber(Options.WeatherPower and Options.WeatherPower.Value) or 60) / 100, 0.05, 1)
+        local snowPower = math.clamp((tonumber(Options.WeatherSnowPower and Options.WeatherSnowPower.Value) or 60) / 100, 0.05, 1)
 
         if kind == '关闭' then
             if rainE then
@@ -36941,12 +36885,12 @@ end)()
         ensureRig()
         local mul = sheltered and 0 or 1
         if kind == '下雨' then
-            rainE.Rate = math.floor(700 * power) * mul
+            rainE.Rate = math.floor(700 * rainPower) * mul
             rainE.Enabled = true
             snowE.Enabled = false
             snowE.Rate = 0
         else
-            snowE.Rate = math.floor(180 * power) * mul
+            snowE.Rate = math.floor(180 * snowPower) * mul
             snowE.Enabled = true
             rainE.Enabled = false
             rainE.Rate = 0
@@ -36966,8 +36910,16 @@ end)()
         Tooltip = '纯客户端效果，只有你自己看得到；粒子跟着相机走，走到哪下到哪',
     })
     Options.WeatherPower = WXGroupWeather:AddSlider('WeatherPower', {
-        Text = '降水强度', Default = 60, Min = 10, Max = 100, Rounding = 0, Suffix = ' %', Compact = false,
-        Tooltip = '越大雨越密 / 雪越大',
+        Text = '降雨密度', Default = 55, Min = 10, Max = 100, Rounding = 0, Suffix = ' %', Compact = false,
+        Tooltip = '下雨时的雨量密度',
+    })
+    Options.WeatherSnowPower = WXGroupWeather:AddSlider('WeatherSnowPower', {
+        Text = '降雪密度', Default = 60, Min = 10, Max = 100, Rounding = 0, Suffix = ' %', Compact = false,
+        Tooltip = '下雪时的雪花密度',
+    })
+    Options.WeatherHeight = WXGroupWeather:AddSlider('WeatherHeight', {
+        Text = '降水高度（格）', Default = 26, Min = 8, Max = 80, Rounding = 0, Compact = false,
+        Tooltip = '粒子从头顶多高开始往下落；调低更像贴近的雨，调高覆盖范围更大',
     })
 
     if Options.WeatherKind and Options.WeatherKind.OnChanged then
@@ -36975,10 +36927,12 @@ end)()
             pcall(apply)
         end)
     end
-    if Options.WeatherPower and Options.WeatherPower.OnChanged then
-        Options.WeatherPower:OnChanged(function()
-            pcall(apply)
-        end)
+    for _, opt in ipairs({ Options.WeatherPower, Options.WeatherSnowPower, Options.WeatherHeight }) do
+        if opt and opt.OnChanged then
+            opt:OnChanged(function()
+                pcall(apply)
+            end)
+        end
     end
 
     RunService.RenderStepped:Connect(function()
@@ -36989,7 +36943,8 @@ end)()
         if not cam then
             return
         end
-        rig.CFrame = CFrame.new(cam.CFrame.Position + Vector3.new(0, 26, 0))
+        local h = math.clamp(tonumber(Options.WeatherHeight and Options.WeatherHeight.Value) or 26, 8, 80)
+        rig.CFrame = CFrame.new(cam.CFrame.Position + Vector3.new(0, h, 0))
     end)
 
     task.defer(function()
@@ -37001,12 +36956,13 @@ end)()
     shelterParams.FilterType = Enum.RaycastFilterType.Exclude
     task.spawn(function()
         while true do
-            task.wait(0.4)
-            local cam = Workspace.CurrentCamera
-            if cam and rig and rig.Parent then
-                local ex = { rig }
-                if LP.Character then
-                    ex[#ex + 1] = LP.Character
+            task.wait(0.3)
+            local char = LP.Character
+            local root = char and char:FindFirstChild('HumanoidRootPart')
+            if root then
+                local ex = {}
+                if rig then
+                    ex[#ex + 1] = rig
                 end
                 for _, pl in ipairs(Players:GetPlayers()) do
                     if pl.Character then
@@ -37014,12 +36970,10 @@ end)()
                     end
                 end
                 shelterParams.FilterDescendantsInstances = ex
-                local hit = Workspace:Raycast(cam.CFrame.Position + Vector3.new(0, 2, 0), Vector3.new(0, 40, 0), shelterParams)
-                local nowShelter = hit ~= nil
-                if nowShelter ~= sheltered then
-                    sheltered = nowShelter
-                    pcall(apply)
-                end
+                -- 从头顶往上 60 格：有东西挡住就算在屋里/掩体下
+                local hit = Workspace:Raycast(root.Position + Vector3.new(0, 3, 0), Vector3.new(0, 60, 0), shelterParams)
+                sheltered = (hit ~= nil)
+                pcall(apply)
             end
         end
     end)
