@@ -22306,17 +22306,27 @@ Options.PubgKillMsgDuration = KillMsgGroup:AddSlider('PubgKillMsgDuration', {
     Text = '停留时长（秒）', Default = 3, Min = 1, Max = 8, Rounding = 1, Compact = false
 })
 
--- 掩体绘制（只画半径内那一段，越远越淡）
+-- 掩体绘制（只画半径内那一段，按形状画，越远越淡）
 local CoverGroup = Tabs.Visuals:AddLeftGroupbox('掩体绘制')
 
 Toggles.CoverOutline = CoverGroup:AddToggle('CoverOutline', {
     Text = '启用掩体绘制',
     Default = false,
-    Tooltip = '以自己为圆心，只描半径内的那一截墙；圈外部分完全不画，越靠边越淡',
+    Tooltip = '以自己为圆心，只描半径内的那一截；圆外部分不画，越靠边越淡',
 })
 Options.CoverOutlineRange = CoverGroup:AddSlider('CoverOutlineRange', {
     Text = '范围（格）', Default = 60, Min = 10, Max = 400, Rounding = 0, Compact = false,
     Tooltip = '圈的半径：圆内的墙体被描边，圆外的那截不画',
+})
+Toggles.CoverOutlineThroughWall = CoverGroup:AddToggle('CoverOutlineThroughWall', {
+    Text = '绘制墙后（穿墙可见）',
+    Default = false,
+    Tooltip = '开：不管有没有被挡住都画；关：被墙挡住的掩体不画（按部件做遮挡判断，稍费性能）',
+})
+Toggles.CoverOutlineOverlap = CoverGroup:AddToggle('CoverOutlineOverlap', {
+    Text = '重叠绘制',
+    Default = false,
+    Tooltip = '开：同一个模型里嵌套的部件全都画（线条会重叠）；关：只画最外层，内部内衬自动丢掉',
 })
 Options.CoverOutlineOpacity = CoverGroup:AddSlider('CoverOutlineOpacity', {
     Text = '描边浓度', Default = 100, Min = 10, Max = 100, Rounding = 0, Suffix = ' %', Compact = false,
@@ -34998,10 +35008,10 @@ end)()
     end)
 end)()
 
--- ====================== 掩体绘制（只画圈内那一段，越远越淡） ======================
--- 做法：把每个部件的 12 条棱按「以自己为圆心、半径 = 范围」的圆做裁剪，
---       只画裁完还留在圆内的那截线；圆外的部分一根线都不画（不是把整块墙框住）。
---       没有烟雾 / 没有波纹 / 不用 Highlight 整块描边。
+-- ====================== 掩体绘制（只画圈内那一段，按形状画，越远越淡） ======================
+-- 做法：按部件真实形状（方块 / 圆柱 / 球 / 楔形）生成棱线，
+--       再把每条棱按「以自己为圆心、半径 = 范围」的圆裁剪，只画圆内那截。
+--       网格模型（树、装饰 MeshPart）形状无法还原，直接跳过，避免画成大方块。
 ; (function()
     local Workspace = game:GetService('Workspace')
 
@@ -35012,8 +35022,9 @@ end)()
         end
     end
 
-    local MAX_PARTS = 40          -- 一次最多描多少个部件（每个部件 12 条棱）
-    local BITS = { 1, 2, 4 }      -- 角落索引的位运算，用来生成 12 条棱
+    local MAX_PARTS = 60          -- 一次最多描多少个部件
+    local MAX_SEGS = 900          -- 线条总预算，超了就不再往下画
+    local BITS = { 1, 2, 4 }
 
     local pool = {}
     local prevUsed = 0
@@ -35072,11 +35083,114 @@ end)()
         return (part.Position - pos).Magnitude
     end
 
+    -- 世界坐标下的 8 个角 + 包围盒，用来做「嵌套部件去重」和遮挡采样
+    local function partBox(part)
+        local cf, sz = part.CFrame, part.Size
+        local hs = sz * 0.5
+        local corners = {}
+        local mn, mx
+        for ci = 1, 8 do
+            local v = ci - 1
+            local p = cf:PointToWorldSpace(Vector3.new(
+                ((v % 2 == 1) and 1 or -1) * hs.X,
+                ((math.floor(v / 2) % 2 == 1) and 1 or -1) * hs.Y,
+                ((math.floor(v / 4) % 2 == 1) and 1 or -1) * hs.Z))
+            corners[ci] = p
+            if not mn then
+                mn, mx = p, p
+            else
+                mn = Vector3.new(math.min(mn.X, p.X), math.min(mn.Y, p.Y), math.min(mn.Z, p.Z))
+                mx = Vector3.new(math.max(mx.X, p.X), math.max(mx.Y, p.Y), math.max(mx.Z, p.Z))
+            end
+        end
+        return corners, mn, mx
+    end
+
+    -- 按真实形状生成棱线
+    local function buildSegments(part)
+        local cf, sz = part.CFrame, part.Size
+        local hx, hy, hz = sz.X * 0.5, sz.Y * 0.5, sz.Z * 0.5
+        local segs = {}
+        local function W(x, y, z)
+            return cf:PointToWorldSpace(Vector3.new(x, y, z))
+        end
+        local function add(a, b)
+            segs[#segs + 1] = { a, b }
+        end
+
+        local shape = nil
+        if part:IsA('Part') then
+            shape = part.Shape
+        end
+
+        if shape == Enum.PartType.Ball then
+            -- 球：三个正圆（水平 + 两个竖直）
+            local r = math.min(hx, hy, hz)
+            local N = 12
+            for i = 0, N - 1 do
+                local a1 = i / N * math.pi * 2
+                local a2 = (i + 1) / N * math.pi * 2
+                add(W(math.cos(a1) * r, 0, math.sin(a1) * r), W(math.cos(a2) * r, 0, math.sin(a2) * r))
+                add(W(math.cos(a1) * r, math.sin(a1) * r, 0), W(math.cos(a2) * r, math.sin(a2) * r, 0))
+                add(W(0, math.cos(a1) * r, math.sin(a1) * r), W(0, math.cos(a2) * r, math.sin(a2) * r))
+            end
+        elseif shape == Enum.PartType.Cylinder then
+            -- 圆柱：两端圆 + 四条母线（Roblox 圆柱轴向是本地 X）
+            local N = 12
+            for i = 0, N - 1 do
+                local a1 = i / N * math.pi * 2
+                local a2 = (i + 1) / N * math.pi * 2
+                local y1, z1 = math.cos(a1) * hy, math.sin(a1) * hz
+                local y2, z2 = math.cos(a2) * hy, math.sin(a2) * hz
+                add(W(-hx, y1, z1), W(-hx, y2, z2))
+                add(W(hx, y1, z1), W(hx, y2, z2))
+            end
+            add(W(-hx, hy, 0), W(hx, hy, 0))
+            add(W(-hx, -hy, 0), W(hx, -hy, 0))
+            add(W(-hx, 0, hz), W(hx, 0, hz))
+            add(W(-hx, 0, -hz), W(hx, 0, -hz))
+        elseif shape == Enum.PartType.Wedge or shape == Enum.PartType.CornerWedge then
+            -- 楔形：底面矩形 + 顶部一条棱，斜面从顶棱落到前下沿
+            local A = W(-hx, -hy, -hz)
+            local B = W(hx, -hy, -hz)
+            local C = W(hx, -hy, hz)
+            local D = W(-hx, -hy, hz)
+            local E = W(-hx, hy, -hz)
+            local F = W(hx, hy, -hz)
+            add(A, B); add(B, C); add(C, D); add(D, A)
+            add(A, E); add(B, F); add(E, F)
+            add(E, D); add(F, C)
+        else
+            -- 方块：12 条棱
+            local corners = {}
+            for ci = 1, 8 do
+                local v = ci - 1
+                corners[ci] = W(
+                    ((v % 2 == 1) and 1 or -1) * hx,
+                    ((math.floor(v / 2) % 2 == 1) and 1 or -1) * hy,
+                    ((math.floor(v / 4) % 2 == 1) and 1 or -1) * hz)
+            end
+            for ci = 1, 8 do
+                local v = ci - 1
+                for _, b in ipairs(BITS) do
+                    if math.floor(v / b) % 2 == 0 then
+                        add(corners[ci], corners[ci + b])
+                    end
+                end
+            end
+        end
+
+        return segs
+    end
+
     local params = OverlapParams.new()
     params.FilterType = Enum.RaycastFilterType.Exclude
     params.MaxParts = 600
 
-    -- 慢扫描：挑出范围内的掩体部件，并预算好它们的 12 条棱（部件静止，扫一次就够）
+    local visParams = RaycastParams.new()
+    visParams.FilterType = Enum.RaycastFilterType.Exclude
+
+    -- 慢扫描：挑部件、去嵌套、生成棱线
     local function scan()
         local enabled = Toggles.CoverOutline and Toggles.CoverOutline.Value
         local char = LP.Character
@@ -35087,6 +35201,12 @@ end)()
         end
 
         local range = math.max(tonumber(Options.CoverOutlineRange and Options.CoverOutlineRange.Value) or 60, 5)
+
+        -- 记住上一轮的可见性，重扫时沿用，避免每次重扫都先当成「可见」而闪出一堆线条
+        local prevVis = {}
+        for _, t in ipairs(targets) do
+            prevVis[t.part] = t.visible
+        end
 
         local exclude = { char }
         if Workspace.CurrentCamera then
@@ -35106,66 +35226,149 @@ end)()
             return
         end
 
-        -- 过滤：太碎的、跨度超大的、扁平大板（地板 / 天花板）都不算掩体
-        local list = {}
+        -- 第一步：筛掉不该画的
+        local byModel = {}
         for _, part in ipairs(parts) do
-            if part:IsA('BasePart') and part.Anchored and part.Transparency < 0.95 then
+            local keep = part:IsA('BasePart')
+                and part.Anchored
+                and part.Transparency < 0.95
+                and part:IsA('Part')                      -- 网格 / 并集形状还原不了：不画
+                and not part:FindFirstChildOfClass('SpecialMesh')  -- 用特殊网格伪装的（树等）也跳过
+
+            if keep then
                 local sz = part.Size
                 local maxSpan = math.max(sz.X, sz.Y, sz.Z)
-                local skip = false
+                local minSpan = math.min(sz.X, sz.Y, sz.Z)
                 if sz.Magnitude < 8 then
-                    skip = true
+                    keep = false                          -- 太碎的装饰块
                 elseif maxSpan > 300 then
-                    skip = true
+                    keep = false                          -- 跨度超大的部件
                 elseif sz.Y <= 2.5 and sz.X > 30 and sz.Z > 30 then
-                    skip = true
+                    keep = false                          -- 扁平大板：地板 / 天花板
+                elseif minSpan <= 1.5 and sz.Y <= 3 and maxSpan >= 25 then
+                    keep = false                          -- 横着的细长条：栏杆 / 压条 / 边饰
                 end
-                if not skip then
-                    local d = surfaceDist(part, root.Position)
-                    if d <= range then
-                        list[#list + 1] = { part = part, dist = d }
+            end
+
+            if keep then
+                local d = surfaceDist(part, root.Position)
+                if d <= range then
+                    local model = part:FindFirstAncestorOfClass('Model') or part
+                    local bucket = byModel[model]
+                    if not bucket then
+                        bucket = {}
+                        byModel[model] = bucket
                     end
+                    local sz = part.Size
+                    bucket[#bucket + 1] = {
+                        part = part,
+                        dist = d,
+                        vol = sz.X * sz.Y * sz.Z,
+                    }
                 end
             end
         end
+
+        -- 第二步：默认只留最外层（同一模型里被别的部件整个包住的内衬 / 装饰丢掉）；
+        --         打开「重叠绘制」就全部保留
+        local overlap = Toggles.CoverOutlineOverlap and Toggles.CoverOutlineOverlap.Value
+        local list = {}
+        for _, bucket in pairs(byModel) do
+            if overlap then
+                for _, item in ipairs(bucket) do
+                    list[#list + 1] = item
+                end
+            else
+                table.sort(bucket, function(a, b)
+                    return a.vol > b.vol
+                end)
+                local kept = {}
+                for _, item in ipairs(bucket) do
+                    local _, mn, mx = partBox(item.part)
+                    local inside = false
+                    for _, k in ipairs(kept) do
+                        local e = 0.5
+                        if mn.X >= k.mn.X - e and mn.Y >= k.mn.Y - e and mn.Z >= k.mn.Z - e
+                            and mx.X <= k.mx.X + e and mx.Y <= k.mx.Y + e and mx.Z <= k.mx.Z + e then
+                            inside = true
+                            break
+                        end
+                    end
+                    if not inside then
+                        kept[#kept + 1] = { mn = mn, mx = mx, item = item }
+                    end
+                end
+                for _, k in ipairs(kept) do
+                    list[#list + 1] = k.item
+                end
+            end
+        end
+
         table.sort(list, function(a, b)
             return a.dist < b.dist
         end)
 
+        -- 第三步：预算棱线
         local newTargets = {}
         for i = 1, math.min(#list, MAX_PARTS) do
             local part = list[i].part
-            local cf = part.CFrame
-            local hs = part.Size * 0.5
-            local corners = {}
-            for ci = 1, 8 do
-                local v = ci - 1
-                local sx = (v % 2 == 1) and 1 or -1
-                local sy = (math.floor(v / 2) % 2 == 1) and 1 or -1
-                local sz = (math.floor(v / 4) % 2 == 1) and 1 or -1
-                corners[ci] = cf:PointToWorldSpace(Vector3.new(sx * hs.X, sy * hs.Y, sz * hs.Z))
-            end
-
-            local edges = {}
-            for ci = 1, 8 do
-                local v = ci - 1
-                for _, b in ipairs(BITS) do
-                    if math.floor(v / b) % 2 == 0 then
-                        edges[#edges + 1] = { corners[ci], corners[ci + b] }
-                    end
-                end
-            end
-
-            newTargets[#newTargets + 1] = { edges = edges, dist = list[i].dist }
+            local corners = partBox(part)
+            newTargets[#newTargets + 1] = {
+                model = part:FindFirstAncestorOfClass('Model') or part,
+                part = part,
+                dist = list[i].dist,
+                segs = buildSegments(part),
+                center = part.Position,
+                corners = corners,
+                visible = prevVis[part] == true,
+            }
         end
 
         targets = newTargets
     end
 
-    -- 逐帧：把每条棱按圆裁剪，只画圆内剩下的那截
+    -- 遮挡测试：被墙挡住的掩体不画（分帧轮询，避免一次打太多射线）
+    local visCursor = 0
+    local function updateVisibility(cam)
+        local n = #targets
+        if n == 0 then
+            return
+        end
+        local origin = cam.CFrame.Position
+        for _ = 1, math.min(4, n) do
+            visCursor = visCursor % n + 1
+            local t = targets[visCursor]
+            -- 只排除这个部件本身：如果它埋在别的墙体里（同一模型的内衬），
+            -- 那些墙体依然会挡住射线，从而判成不可见
+            local ex = { t.part }
+            if LP.Character then
+                ex[#ex + 1] = LP.Character
+            end
+            visParams.FilterDescendantsInstances = ex
+            local samples = { t.center, t.corners[1], t.corners[8], t.corners[4], t.corners[6] }
+            local seen = false
+            for _, p in ipairs(samples) do
+                local dir = p - origin
+                local dist = dir.Magnitude
+                if dist > 0.5 then
+                    local hit = Workspace:Raycast(origin, dir, visParams)
+                    if not hit or hit.Distance >= dist - 0.6 then
+                        seen = true
+                        break
+                    end
+                end
+            end
+            t.visible = seen
+        end
+    end
+
+    -- 逐帧：裁剪 + 投影 + 画
     local function render()
         local enabled = Toggles.CoverOutline and Toggles.CoverOutline.Value
-        if not enabled or #targets == 0 or not drawingOK then
+        local char = LP.Character
+        local root = char and char:FindFirstChild('HumanoidRootPart')
+        local cam = Workspace.CurrentCamera
+        if not enabled or not root or not cam or #targets == 0 or not drawingOK then
             if prevUsed > 0 then
                 hideLines(1, prevUsed)
                 prevUsed = 0
@@ -35173,11 +35376,9 @@ end)()
             return
         end
 
-        local char = LP.Character
-        local root = char and char:FindFirstChild('HumanoidRootPart')
-        local cam = Workspace.CurrentCamera
-        if not root or not cam then
-            return
+        local through = Toggles.CoverOutlineThroughWall and Toggles.CoverOutlineThroughWall.Value
+        if not through then
+            updateVisibility(cam)
         end
 
         local range = math.max(tonumber(Options.CoverOutlineRange and Options.CoverOutlineRange.Value) or 60, 5)
@@ -35188,62 +35389,68 @@ end)()
         local cx, cz = root.Position.X, root.Position.Z
         local r2 = range * range
         local idx = 0
+        local full = false
 
         for _, t in ipairs(targets) do
-            for _, e in ipairs(t.edges) do
-                local a, b = e[1], e[2]
-                local ax, az = a.X - cx, a.Z - cz
-                local dxw, dyw, dzw = b.X - a.X, b.Y - a.Y, b.Z - a.Z
-                local bx, bz = ax + dxw, az + dzw
+            if full then
+                break
+            end
+            if through or t.visible then
+                for _, e in ipairs(t.segs) do
+                    local a, b = e[1], e[2]
+                    local ax, az = a.X - cx, a.Z - cz
+                    local dxw, dyw, dzw = b.X - a.X, b.Y - a.Y, b.Z - a.Z
 
-                -- 求线段落在圆内的参数区间 [t0, t1]
-                local t0, t1
-                local A = dxw * dxw + dzw * dzw
-                local C = ax * ax + az * az - r2
-                if A < 1e-6 then
-                    if C <= 0 then
-                        t0, t1 = 0, 1
-                    end
-                else
-                    local B = 2 * (ax * dxw + az * dzw)
-                    local disc = B * B - 4 * A * C
-                    if disc > 0 then
-                        local sd = math.sqrt(disc)
-                        t0 = (-B - sd) / (2 * A)
-                        t1 = (-B + sd) / (2 * A)
-                        if t0 < 0 then t0 = 0 end
-                        if t1 > 1 then t1 = 1 end
-                        if t1 - t0 <= 0.002 then
-                            t0 = nil
+                    local t0, t1
+                    local A = dxw * dxw + dzw * dzw
+                    local C = ax * ax + az * az - r2
+                    if A < 1e-6 then
+                        if C <= 0 then
+                            t0, t1 = 0, 1
+                        end
+                    else
+                        local B = 2 * (ax * dxw + az * dzw)
+                        local disc = B * B - 4 * A * C
+                        if disc > 0 then
+                            local sd = math.sqrt(disc)
+                            t0 = (-B - sd) / (2 * A)
+                            t1 = (-B + sd) / (2 * A)
+                            if t0 < 0 then t0 = 0 end
+                            if t1 > 1 then t1 = 1 end
+                            if t1 - t0 <= 0.002 then
+                                t0 = nil
+                            end
                         end
                     end
-                end
 
-                if t0 then
-                    local p1 = Vector3.new(a.X + dxw * t0, a.Y + dyw * t0, a.Z + dzw * t0)
-                    local p2 = Vector3.new(a.X + dxw * t1, a.Y + dyw * t1, a.Z + dzw * t1)
-
-                    local s1, v1 = cam:WorldToViewportPoint(p1)
-                    local s2, v2 = cam:WorldToViewportPoint(p2)
-                    if v1 and v2 and s1.Z > 0 and s2.Z > 0 then
-                        -- 距离渐变：用裁完这段线的中点算，越靠边越淡
-                        local mx = (p1.X + p2.X) * 0.5 - cx
-                        local mz = (p1.Z + p2.Z) * 0.5 - cz
-                        local d = math.sqrt(mx * mx + mz * mz)
-                        local alpha = opacity * (1 - math.clamp(d / range, 0, 1)) ^ 1.15
-
-                        if alpha > 0.02 then
-                            idx = idx + 1
-                            local line = getLine(idx)
-                            if not line then
-                                break
+                    if t0 then
+                        local p1 = Vector3.new(a.X + dxw * t0, a.Y + dyw * t0, a.Z + dzw * t0)
+                        local p2 = Vector3.new(a.X + dxw * t1, a.Y + dyw * t1, a.Z + dzw * t1)
+                        local s1, v1 = cam:WorldToViewportPoint(p1)
+                        local s2, v2 = cam:WorldToViewportPoint(p2)
+                        if v1 and v2 and s1.Z > 0 and s2.Z > 0 then
+                            local mx = (p1.X + p2.X) * 0.5 - cx
+                            local mz = (p1.Z + p2.Z) * 0.5 - cz
+                            local d = math.sqrt(mx * mx + mz * mz)
+                            local alpha = opacity * (1 - math.clamp(d / range, 0, 1)) ^ 1.15
+                            if alpha > 0.02 then
+                                idx = idx + 1
+                                if idx > MAX_SEGS then
+                                    full = true
+                                    break
+                                end
+                                local line = getLine(idx)
+                                if not line then
+                                    full = true
+                                    break
+                                end
+                                line.From = Vector2.new(s1.X, s1.Y)
+                                line.To = Vector2.new(s2.X, s2.Y)
+                                line.Color = color
+                                line.Thickness = thickness
+                                line.Transparency = 1 - alpha
+                                line.Visible = true
                             end
-                            line.From = Vector2.new(s1.X, s1.Y)
-                            line.To = Vector2.new(s2.X, s2.Y)
-                            line.Color = color
-                            line.Thickness = thickness
-                            line.Transparency = 1 - alpha
-                            line.Visible = true
                         end
                     end
                 end
@@ -35262,7 +35469,6 @@ end)()
         end)
     end
 
-    -- 零件挑选：0.2s 自适应；线条更新：隔帧（约 30fps）
     local interval = 0.2
     task.spawn(function()
         while true do
@@ -35306,6 +35512,19 @@ end)()
         if option and option.OnChanged then
             option:OnChanged(refreshSoon)
         end
+    end
+
+    if Toggles.CoverOutlineThroughWall then
+        Toggles.CoverOutlineThroughWall:OnChanged(function()
+            for _, t in ipairs(targets) do
+                t.visible = true
+            end
+            refreshSoon()
+        end)
+    end
+
+    if Toggles.CoverOutlineOverlap then
+        Toggles.CoverOutlineOverlap:OnChanged(refreshSoon)
     end
 
     LP.CharacterAdded:Connect(function()
