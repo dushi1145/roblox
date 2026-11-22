@@ -26146,6 +26146,13 @@ local function spawnImpactEffect(pos, color)
 end
 
 local function makeTracer(p1, p2, color1, color2, thickness, lifetime)
+    -- 头顶武器开启时，弹道从头顶那把枪的枪口出来
+    if Toggles.HeadWeapon and Toggles.HeadWeapon.Value and _G.YZHeadWeaponMuzzle then
+        local mp = _G.YZHeadWeaponMuzzle()
+        if mp then
+            p1 = mp
+        end
+    end
     color2 = color2 or color1
     local mode = Options.TracerMode and Options.TracerMode.Value or 'Solid Beam'
     local matName = Options.TracerMaterial and Options.TracerMaterial.Value or 'Neon'
@@ -36914,8 +36921,9 @@ end)()
         capeModel.Name = 'YZCape'
         capeModel.Parent = char
 
-        local torsoWidth = math.clamp(torso.Size.X * 1.05, 1.4, 3.2)
-        local capeLen = 2.6
+        local wMul = tonumber(Options.CapeWidth and Options.CapeWidth.Value) or 1
+        local torsoWidth = math.clamp(torso.Size.X * 1.05 * wMul, 0.8, 5.0)
+        local capeLen = math.clamp(tonumber(Options.CapeLength and Options.CapeLength.Value) or 2.6, 1.0, 6.0)
         -- 多段时总长 = (total-1)*slotH + 1.42*slotH，反推出 slotH，丝滑和硬板长度才一致
         local slotH, partH
         if total > 1 then
@@ -37059,6 +37067,14 @@ end)()
         Text = '布料段数', Default = 6, Min = 3, Max = 8, Rounding = 0, Compact = false,
         Tooltip = '段数越多摆动越细，6 段是「丝滑」和性能的平衡点；硬板模式忽略',
     })
+    Options.CapeLength = WXGroupCape:AddSlider('CapeLength', {
+        Text = '长度（格）', Default = 2.6, Min = 1.0, Max = 6.0, Rounding = 1, Compact = false,
+        Tooltip = '披风总长；丝滑和硬板两种模式长度一致',
+    })
+    Options.CapeWidth = WXGroupCape:AddSlider('CapeWidth', {
+        Text = '宽度倍率', Default = 1.0, Min = 0.6, Max = 2.2, Rounding = 2, Compact = false,
+        Tooltip = '按身体宽度等比放大 / 收窄；1.0 = 比肩宽略宽，2.0 就是大披风',
+    })
     Options.CapeOffsetX = WXGroupCape:AddSlider('CapeOffsetX', {
         Text = '位置 X（左右）', Default = 0, Min = -2, Max = 2, Rounding = 2, Compact = false,
         Tooltip = '在默认挂点上左右挪，0 = 正中',
@@ -37093,6 +37109,8 @@ end)()
             end
         end,
     })
+    WXGroupCape:AddLabel('图片建议 512×512 或 512×1024（宽×高）')
+    WXGroupCape:AddLabel('放在 YZ_HUB/cape/cape.png，整张铺满披风')
 
     Toggles.CapeEnabled:OnChanged(function(v)
         if v then
@@ -37126,6 +37144,16 @@ end)()
         end
     end)
 
+    for _, opt in ipairs({ Options.CapeLength, Options.CapeWidth }) do
+        if opt and opt.OnChanged then
+            opt:OnChanged(function()
+                if Toggles.CapeEnabled and Toggles.CapeEnabled.Value then
+                    pcall(buildCape)
+                end
+            end)
+        end
+    end
+
     if Options.CapeColor and Options.CapeColor.OnChanged then
         Options.CapeColor:OnChanged(function()
             if Toggles.CapeEnabled and Toggles.CapeEnabled.Value then
@@ -37145,6 +37173,203 @@ end)()
 
     RunService.RenderStepped:Connect(function(dt)
         pcall(render, math.clamp(dt, 0, 0.1))
+    end)
+end)()
+
+-- ====================== 头顶武器（武器在头顶横着转 + 可隐藏手上武器） ======================
+-- 拿在手上的枪会被克隆一份放到头顶，绕竖轴旋转；位置带惯性（像移动相机那种跟手感）。
+-- 开启「隐藏手上武器」后，手上的枪只对你隐身（LocalTransparencyModifier），
+-- 同时这颗头顶的枪就是弹道的发射点（makeTracer 里读 _G.YZHeadWeaponMuzzle）。
+; (function()
+    local RunService = game:GetService('RunService')
+    local Workspace = game:GetService('Workspace')
+
+    local model, visual, lastTool
+    local angle = 0
+    local smoothPos = nil
+
+    local function currentTool()
+        local char = LP.Character
+        if not char then
+            return nil
+        end
+        for _, c in ipairs(char:GetChildren()) do
+            if c:IsA('Tool') then
+                return c
+            end
+        end
+        return nil
+    end
+
+    local function clearVisual()
+        if model then
+            pcall(function()
+                model:Destroy()
+            end)
+        end
+        model, visual = nil, nil
+        if lastTool then
+            local h = lastTool:FindFirstChild('Handle')
+            if h then
+                pcall(function()
+                    h.LocalTransparencyModifier = 0
+                end)
+            end
+        end
+        lastTool = nil
+        smoothPos = nil
+    end
+
+    local function buildVisual(tool)
+        clearVisual()
+        local handle = tool:FindFirstChild('Handle')
+        if not handle then
+            lastTool = tool
+            return
+        end
+
+        local clone = handle:Clone()
+        clone.Name = 'YZHeadWeaponPart'
+        clone.Anchored = true
+        clone.CanCollide = false
+        clone.CanQuery = false
+        clone.CanTouch = false
+        clone.CastShadow = false
+        clone.Transparency = 0
+        clone.Massless = true
+        for _, d in ipairs(clone:GetChildren()) do
+            if d:IsA('ParticleEmitter') or d:IsA('Light') or d:IsA('Trail')
+                or d:IsA('Sound') or d:IsA('Weld') or d:IsA('Motor6D') then
+                pcall(function()
+                    d:Destroy()
+                end)
+            end
+        end
+
+        model = Instance.new('Model')
+        model.Name = 'YZHeadWeapon'
+        model.Parent = Workspace
+        clone.Parent = model
+        visual = clone
+        lastTool = tool
+    end
+
+    -- 弹道起点：头顶那把枪的枪口
+    _G.YZHeadWeaponMuzzle = function()
+        if not visual or not visual.Parent then
+            return nil
+        end
+        local cf = visual.CFrame
+        local len = (visual.Size.Z > 0.2) and (visual.Size.Z * 0.5) or 0.6
+        return cf.Position + cf.LookVector * (len + 0.35)
+    end
+
+    ----------------------------------------------------------------------
+    -- 界面
+    ----------------------------------------------------------------------
+    WXGroupHeadWeapon = Tabs.Visuals:AddLeftGroupbox('头顶武器')
+
+    Toggles.HeadWeapon = WXGroupHeadWeapon:AddToggle('HeadWeapon', {
+        Text = '启用头顶武器',
+        Default = false,
+        Tooltip = '把手上的枪克隆一份放到头顶横着转；只有你自己看得见',
+    })
+    Options.HeadWeaponSpin = WXGroupHeadWeapon:AddSlider('HeadWeaponSpin', {
+        Text = '旋转速度（度/秒）', Default = 90, Min = 0, Max = 720, Rounding = 0, Compact = false,
+        Tooltip = '0 = 不转，90 = 4 秒一圈，360 = 1 秒一圈',
+    })
+    Toggles.HeadWeaponHide = WXGroupHeadWeapon:AddToggle('HeadWeaponHide', {
+        Text = '隐藏手上武器',
+        Default = true,
+        Tooltip = '手上那把枪只对你隐身，别人还能看到；弹道改从头顶的枪出来',
+    })
+
+    Toggles.HeadWeapon:OnChanged(function(v)
+        if not v then
+            pcall(clearVisual)
+        end
+    end)
+
+    if Toggles.HeadWeaponHide and Toggles.HeadWeaponHide.OnChanged then
+        Toggles.HeadWeaponHide:OnChanged(function(v)
+            local tool = lastTool
+            if tool then
+                local h = tool:FindFirstChild('Handle')
+                if h then
+                    pcall(function()
+                        h.LocalTransparencyModifier = v and 1 or 0
+                    end)
+                end
+            end
+        end)
+    end
+
+    LP.CharacterAdded:Connect(function()
+        pcall(clearVisual)
+    end)
+
+    RunService.RenderStepped:Connect(function(dt)
+        dt = math.clamp(dt, 0, 0.1)
+        if not (Toggles.HeadWeapon and Toggles.HeadWeapon.Value) then
+            if model then
+                pcall(clearVisual)
+            end
+            return
+        end
+
+        local tool = currentTool()
+        if not tool then
+            if model then
+                pcall(clearVisual)
+            end
+            return
+        end
+
+        if tool ~= lastTool or not visual or not visual.Parent then
+            pcall(buildVisual, tool)
+        end
+        if not visual or not visual.Parent then
+            return
+        end
+
+        local char = LP.Character
+        local head = char and char:FindFirstChild('Head')
+        local root = char and char:FindFirstChild('HumanoidRootPart')
+        if not head or not root then
+            return
+        end
+
+        -- 手上隐藏
+        local hide = not (Toggles.HeadWeaponHide and Toggles.HeadWeaponHide.Value == false)
+        local handle = tool:FindFirstChild('Handle')
+        if handle then
+            local want = hide and 1 or 0
+            if handle.LocalTransparencyModifier ~= want then
+                pcall(function()
+                    handle.LocalTransparencyModifier = want
+                end)
+            end
+        end
+
+        local spin = tonumber(Options.HeadWeaponSpin and Options.HeadWeaponSpin.Value) or 90
+        angle = (angle + dt * spin) % 360
+
+        -- 头顶位置 + 惯性跟随（这就是「移动相机的感觉」）
+        local targetPos = head.CFrame.Position + Vector3.new(0, 2.35, 0)
+        if smoothPos == nil then
+            smoothPos = targetPos
+        else
+            smoothPos = smoothPos:Lerp(targetPos, 1 - math.exp(-dt * 11))
+        end
+
+        -- 跑动 / 横移时往反方向稍微倾斜，像挂在头顶被甩起来
+        local vel = root.AssemblyLinearVelocity
+        local lat = vel:Dot(root.CFrame.RightVector)
+        local fwd = vel:Dot(root.CFrame.LookVector)
+        local lean = CFrame.Angles(0, 0, math.clamp(-lat * 0.0035, -0.28, 0.28))
+            * CFrame.Angles(math.clamp(fwd * 0.0028, -0.22, 0.22), 0, 0)
+
+        visual.CFrame = CFrame.new(smoothPos) * lean * CFrame.Angles(0, math.rad(angle), 0)
     end)
 end)()
 
