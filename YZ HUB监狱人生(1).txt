@@ -21751,6 +21751,310 @@ Toggles.VoidAntiTargetLock = VoidDep:AddToggle('VoidAntiTargetLock', {
     Tooltip = '快速微抖动位置，破坏敌方自瞄预测'
 })
 
+-- ====================== 自动抓捕（选人 → 传过去 → 发包逮捕 → 传回原位） ======================
+-- 跟「逮捕光环」走同一条路：ReplicatedStorage.Remotes.ArrestPlayer:InvokeServer(目标, 1)。
+-- 不模拟点击、不需要手铐，直接发逮捕包；抓完自动飞回开启功能时站的位置。
+; (function()
+    local PlayersService = game:GetService('Players')
+    local ReplicatedStorage = game:GetService('ReplicatedStorage')
+
+    local savedCF = nil      -- 开启时记下的位置（抓完回原位用）
+    local lastNotice = -99
+    local arrestRemote = nil
+
+    local refreshList
+    local alreadyCuffed
+
+    local function notify(msg)
+        if os.clock() - lastNotice < 2 then
+            return
+        end
+        lastNotice = os.clock()
+        pcall(function()
+            Library:Notify({ Title = '自动抓捕', Description = msg, Time = 4 })
+        end)
+    end
+
+    -- 找逮捕远程：优先 Remotes.ArrestPlayer（和逮捕光环同一个），找不到就在 ReplicatedStorage 里按名字扫
+    local function getArrestRemote()
+        if arrestRemote and arrestRemote.Parent then
+            return arrestRemote
+        end
+        local remotes = ReplicatedStorage:FindFirstChild('Remotes')
+        if remotes then
+            local r = remotes:FindFirstChild('ArrestPlayer')
+            if r and (r:IsA('RemoteFunction') or r:IsA('RemoteEvent')) then
+                arrestRemote = r
+                return r
+            end
+        end
+        local ok, list = pcall(function()
+            return ReplicatedStorage:GetDescendants()
+        end)
+        if ok then
+            for _, d in ipairs(list) do
+                if d:IsA('RemoteFunction') or d:IsA('RemoteEvent') then
+                    local n = string.lower(d.Name)
+                    if n:find('arrest', 1, true) or n:find('cuff', 1, true) or n:find('拘捕', 1, true) then
+                        arrestRemote = d
+                        return d
+                    end
+                end
+            end
+        end
+        return nil
+    end
+
+    local function aliveRoot(p)
+        local ch = p and p.Character
+        if not ch then
+            return nil
+        end
+        local hum = ch:FindFirstChildOfClass('Humanoid')
+        if not hum or hum.Health <= 0 then
+            return nil
+        end
+        return ch:FindFirstChild('HumanoidRootPart') or ch:FindFirstChild('UpperTorso')
+    end
+
+    local function pickTarget()
+        local pick = Options.AutoArrestTarget and Options.AutoArrestTarget.Value
+        local myChar = LP.Character
+        local myRoot = myChar and myChar:FindFirstChild('HumanoidRootPart')
+        if pick == '最近的人' then
+            local best, bestD = nil, math.huge
+            for _, p in ipairs(PlayersService:GetPlayers()) do
+                if p ~= LP and not (alreadyCuffed and alreadyCuffed(p)) then
+                    local r = aliveRoot(p)
+                    if r and myRoot then
+                        local d = (r.Position - myRoot.Position).Magnitude
+                        if d < bestD then
+                            bestD, best = d, p
+                        end
+                    end
+                end
+            end
+            return best
+        end
+        if type(pick) ~= 'string' or pick == '' or pick == 'None' then
+            return nil
+        end
+        for _, p in ipairs(PlayersService:GetPlayers()) do
+            if p ~= LP and p.Name == pick then
+                return p
+            end
+        end
+        return nil
+    end
+
+    local function teleportNextTo(p, range)
+        local myChar = LP.Character
+        local myRoot = myChar and myChar:FindFirstChild('HumanoidRootPart')
+        local tRoot = aliveRoot(p)
+        if not (myRoot and tRoot) then
+            return false
+        end
+        -- 站在目标正前方 range 格，正面朝向对方（抓人一般要正对着）
+        local dest = tRoot.Position + tRoot.CFrame.LookVector * range
+        local ok = pcall(function()
+            myChar:PivotTo(CFrame.lookAt(dest, tRoot.Position))
+        end)
+        return ok
+    end
+
+    -- 目标已经被抓了就别再发了
+    alreadyCuffed = function(p)
+        local ch = p and p.Character
+        if not ch then
+            return false
+        end
+        for _, k in ipairs({ 'Cuffed', 'IsCuffed', 'Handcuffed', 'Restrained', 'Arrested' }) do
+            local ok, v = pcall(function()
+                return ch:GetAttribute(k)
+            end)
+            if ok and v then
+                return true
+            end
+        end
+        return false
+    end
+
+    local function arrestOnce()
+        local p = pickTarget()
+        if not p then
+            return false
+        end
+        if alreadyCuffed(p) then
+            return false
+        end
+        local remote = getArrestRemote()
+        if not remote then
+            notify('这个服找不到 ArrestPlayer 远程，自动抓捕用不了')
+            return false
+        end
+
+        local range = tonumber(Options.AutoArrestRange and Options.AutoArrestRange.Value) or 2
+        if not teleportNextTo(p, range) then
+            return false
+        end
+        -- 等一帧让位置同步上去，再发包（有些服会校验距离）
+        task.wait(0.08)
+
+        -- 发包（InvokeServer 正常情况下立即返回；万一服务器不回就 1.5 秒后放弃，别把循环卡死）
+        local done, res = false, nil
+        task.spawn(function()
+            local ok2, r2 = pcall(function()
+                if remote:IsA('RemoteEvent') then
+                    remote:FireServer(p, 1)
+                    return true
+                end
+                return remote:InvokeServer(p, 1)
+            end)
+            done, res = true, (ok2 and r2 or nil)
+        end)
+        local t0 = os.clock()
+        while not done and (os.clock() - t0) < 1.5 do
+            task.wait(0.05)
+        end
+
+        -- 抓完飞回开启功能时站的位置
+        local back = not (Toggles.AutoArrestReturn and Toggles.AutoArrestReturn.Value == false)
+        if back and savedCF then
+            local ch = LP.Character
+            if ch then
+                pcall(function()
+                    ch:PivotTo(savedCF)
+                end)
+            end
+        end
+        return done, res
+    end
+
+    ----------------------------------------------------------------------
+    -- 界面
+    ----------------------------------------------------------------------
+    local ArrestGroup = Void_Tab:AddLeftGroupbox('自动抓捕')
+
+    Toggles.AutoArrest = ArrestGroup:AddToggle('AutoArrest', {
+        Text = '自动抓捕',
+        Default = false,
+        Tooltip = '选中目标后自动传过去、发逮捕包，抓完飞回原位；走的是 ArrestPlayer 远程，不需要手铐',
+    })
+
+    Options.AutoArrestTarget = WXDrop(ArrestGroup, 'AutoArrestTarget', {
+        Values = { 'None', '最近的人' },
+        Default = 1,
+        Multi = false,
+        Text = '抓捕目标',
+        Tooltip = '选一个具体玩家，或者用「最近的人」自动挑离你最近的那个',
+    })
+
+    Options.AutoArrestRange = ArrestGroup:AddSlider('AutoArrestRange', {
+        Text = '贴身距离', Default = 2, Min = 1, Max = 10, Rounding = 0, Compact = false,
+    })
+
+    Options.AutoArrestDelay = ArrestGroup:AddSlider('AutoArrestDelay', {
+        Text = '抓捕间隔（秒）', Default = 0.25, Min = 0.05, Max = 2, Rounding = 2, Compact = false,
+    })
+
+    Toggles.AutoArrestReturn = ArrestGroup:AddToggle('AutoArrestReturn', {
+        Text = '抓完回到原位',
+        Default = true,
+        Tooltip = '每次逮捕包发出去以后，把自己传回开启自动抓捕时站的位置',
+    })
+
+    ArrestGroup:AddButton({
+        Text = '刷新玩家列表',
+        Func = function()
+            if refreshList then
+                refreshList()
+            end
+        end,
+    })
+
+    ArrestGroup:AddButton({
+        Text = '立刻抓一次',
+        Func = function()
+            local p = pickTarget()
+            if not p then
+                notify('还没选目标')
+                return
+            end
+            if not getArrestRemote() then
+                notify('这个服找不到 ArrestPlayer 远程')
+                return
+            end
+            task.spawn(function()
+                pcall(arrestOnce)
+            end)
+        end,
+    })
+
+    ----------------------------------------------------------------------
+    -- 逻辑
+    ----------------------------------------------------------------------
+    refreshList = function()
+        local prev = Options.AutoArrestTarget and Options.AutoArrestTarget.Value
+        local list = { 'None', '最近的人' }
+        local names = {}
+        for _, p in ipairs(PlayersService:GetPlayers()) do
+            if p ~= LP then
+                table.insert(names, p.Name)
+            end
+        end
+        table.sort(names)
+        for _, n in ipairs(names) do
+            table.insert(list, n)
+        end
+        if Options.AutoArrestTarget then
+            pcall(function()
+                Options.AutoArrestTarget:SetValues(list)
+                if prev and prev ~= '' and table.find(list, prev) then
+                    Options.AutoArrestTarget:SetValue(prev)
+                end
+            end)
+        end
+    end
+
+    pcall(refreshList)
+    PlayersService.PlayerAdded:Connect(function()
+        task.delay(1, function()
+            pcall(refreshList)
+        end)
+    end)
+    PlayersService.PlayerRemoving:Connect(function()
+        task.delay(0.5, function()
+            pcall(refreshList)
+        end)
+    end)
+
+    Toggles.AutoArrest:OnChanged(function(v)
+        if v then
+            local ch = LP.Character
+            local ok, cf = pcall(function()
+                return ch and ch:GetPivot()
+            end)
+            savedCF = (ok and cf) or nil
+            local remote = getArrestRemote()
+            if not remote then
+                notify('这个服找不到 ArrestPlayer 远程，抓捕可能无效')
+            else
+                notify('已记住当前位置，抓完会飞回来')
+            end
+        end
+    end)
+
+    task.spawn(function()
+        while true do
+            local delay = tonumber(Options.AutoArrestDelay and Options.AutoArrestDelay.Value) or 0.25
+            task.wait(math.clamp(delay, 0.05, 2))
+            if Toggles.AutoArrest and Toggles.AutoArrest.Value then
+                pcall(arrestOnce)
+            end
+        end
+    end)
+end)()
+
 -- ====================== VISUALS ======================
 
 -- Left Column 1: Player & Target ESP
@@ -35965,11 +36269,30 @@ end)()
     local BASE_W, BASE_H = 246, 88
 
     local startTime = os.clock()
-    local kills = 0          -- 本地估算计数（游戏没有击杀统计时才用）
+    local kills = 0          -- 本地计数（游戏没有击杀统计时才用）
     local deaths = 0
     local killStat = nil     -- 游戏自带的击杀统计（有就优先用它）
 
+    -- 同一个人的同一次死亡只算一次（播报和兜底可能同时报到）
+    local countedAt = setmetatable({}, { __mode = 'k' })
+
+    local function addKill(victim)
+        if killStat then
+            return
+        end
+        if victim then
+            local t = countedAt[victim]
+            if t and os.clock() - t < 3 then
+                return
+            end
+            countedAt[victim] = os.clock()
+        end
+        kills = kills + 1
+    end
+
     local gui, card, avatar, line1, line2
+    local shadowHolder, shadowLayers
+    local syncShadow, applyShadow
     local scale = 1
     local dragging, dragStart, startPos
 
@@ -35986,7 +36309,7 @@ end)()
     -- 找游戏自带的击杀统计：可以手动指定名字，也可以自动模糊匹配
     local function findKillStat()
         local pick = (Options.KillStatName and Options.KillStatName.Value) or '自动'
-        if pick == '本地估算' then
+        if pick == '本地估算' or pick == '播报' then
             return nil
         end
         local ls = LP:FindFirstChild('leaderstats')
@@ -36041,8 +36364,44 @@ end)()
         return (root.Position - pos).Magnitude <= radius
     end
 
-    -- 没有被游戏统计时的兜底：手里拿着武器、30 格内把人打掉血，且 6 秒内死亡 → 记一次击杀
-    local lastHit = {}
+    -- 没有被游戏统计时的兜底：手里拿着武器、把人打掉血，且 6 秒内死亡 → 记一次击杀
+    local lastHit = {}       -- 最后一次让对方掉血的时间
+    local hitStrong = {}     -- 那次掉血是否有“凶手就是我”的强证据
+    local lastPos = {}       -- 掉血时的位置（人死了 RootPart 可能已经没了，用这个兜底）
+
+    -- 很多监狱/枪战类游戏会在 Humanoid 上挂 creator / LastAttacker 之类标记，
+    -- 值就是开枪的人（名字或 UserId）。有这种标记时击杀判定就是准的。
+    local TAG_OBJECTS = { 'creator', 'Creator', 'killer', 'Killer', 'LastAttacker', 'lastAttacker', 'LastHitBy', 'lastHitBy', 'HitBy' }
+    local TAG_ATTRS = { 'LastAttacker', 'lastAttacker', 'Killer', 'killer', 'Attacker', 'LastHitBy', 'lastHitBy', 'Damager' }
+
+    local function tagSaysMe(hum)
+        for _, nm in ipairs(TAG_OBJECTS) do
+            local c = hum:FindFirstChild(nm)
+            if c then
+                local ok, v = pcall(function()
+                    return c.Value
+                end)
+                if ok and v ~= nil then
+                    local s = tostring(v)
+                    if s == LP.Name or s == tostring(LP.UserId) then
+                        return true
+                    end
+                end
+            end
+        end
+        for _, nm in ipairs(TAG_ATTRS) do
+            local ok, v = pcall(function()
+                return hum:GetAttribute(nm)
+            end)
+            if ok and v ~= nil then
+                local s = tostring(v)
+                if s == LP.Name or s == tostring(LP.UserId) then
+                    return true
+                end
+            end
+        end
+        return false
+    end
 
     local function hasTool()
         local char = LP.Character
@@ -36076,27 +36435,39 @@ end)()
                     local ok, pos = pcall(function()
                         return hum.RootPart and hum.RootPart.Position
                     end)
-                    if ok and pos and hasTool() and nearMe(pos, 30) then
-                        lastHit[p] = os.clock()
+                    if ok and pos then
+                        lastPos[p] = pos
+                        if tagSaysMe(hum) then
+                            -- 游戏自己标了“凶手是我”，这就是强证据，直接记
+                            lastHit[p] = os.clock()
+                            hitStrong[p] = true
+                        elseif hasTool() and nearMe(pos, 45) then
+                            lastHit[p] = os.clock()
+                            hitStrong[p] = false
+                        end
                     end
                 end
                 lastHealth = h
             end)
             hum.Died:Connect(function()
                 if killStat then
+                    lastHit[p], hitStrong[p], lastPos[p] = nil, nil, nil
                     return
                 end
                 local t = lastHit[p]
-                if t and os.clock() - t <= 5 then
-                    local ok, pos = pcall(function()
-                        return hum.RootPart and hum.RootPart.Position
-                    end)
-                    -- 只有“最后打掉血 + 5 秒内死亡 + 自己是离尸体最近的人”才记一次
-                    if ok and pos and closestIsMe(pos) then
-                        kills = kills + 1
-                    end
+                local fresh = t ~= nil and (os.clock() - t) <= 6
+                local strong = hitStrong[p] == true or tagSaysMe(hum)
+                local ok, pos = pcall(function()
+                    return hum.RootPart and hum.RootPart.Position
+                end)
+                if not (ok and pos) then
+                    pos = lastPos[p]
                 end
-                lastHit[p] = nil
+                -- 强证据：算我的；弱证据（只是我打掉过血）：得是离尸体最近的那个才算
+                if strong or (fresh and pos and closestIsMe(pos)) then
+                    addKill(p)
+                end
+                lastHit[p], hitStrong[p], lastPos[p] = nil, nil, nil
             end)
         end
         hook()
@@ -36144,6 +36515,9 @@ end)()
         line2.Position = UDim2.fromOffset(math.floor(78 * s), math.floor(48 * s))
         line2.Size = UDim2.new(1, -math.floor(88 * s), 0, math.floor(22 * s))
         line2.TextSize = math.floor(15 * s)
+        if syncShadow then
+            syncShadow()
+        end
     end
 
     local function savePos()
@@ -36210,12 +36584,67 @@ end)()
         stroke.Transparency = 0.25
         stroke.Parent = card
 
+        ------------------------------------------------------------------
+        -- 卡片阴影：26 层极小的黑框往外叠，等于一层连续模糊
+        ------------------------------------------------------------------
+        shadowHolder = Instance.new('Frame')
+        shadowHolder.Name = 'ShadowHolder'
+        shadowHolder.BackgroundTransparency = 1
+        shadowHolder.BorderSizePixel = 0
+        shadowHolder.ZIndex = 1
+        shadowHolder.Size = card.Size
+        shadowHolder.Position = card.Position
+        shadowHolder.Parent = gui
+
+        card.ZIndex = 2
+
+        shadowLayers = {}
+        local SHADOW_LAYERS = 26
+        for i = 1, SHADOW_LAYERS do
+            local padi = i * 0.52
+            local layer = Instance.new('Frame')
+            layer.BorderSizePixel = 0
+            layer.BackgroundColor3 = Color3.new(0, 0, 0)
+            layer.ZIndex = 1
+            layer.Size = UDim2.new(1, padi * 2, 1, padi * 2)
+            layer.Position = UDim2.fromOffset(-padi, -padi + 3)
+            layer.Parent = shadowHolder
+            local lc = Instance.new('UICorner')
+            lc.CornerRadius = UDim.new(0, 14 + padi * 0.8)
+            lc.Parent = layer
+            local alpha = 0.075 * (1 - (i - 1) / (SHADOW_LAYERS - 1))
+            shadowLayers[i] = { Frame = layer, Alpha = alpha }
+        end
+
+        syncShadow = function()
+            if shadowHolder and card then
+                shadowHolder.Size = card.Size
+                shadowHolder.Position = card.Position
+            end
+        end
+
+        applyShadow = function()
+            local on = not (Toggles.StatsHUDShadowOn and Toggles.StatsHUDShadowOn.Value == false)
+            local dens = 1
+            if Options.StatsHUDShadowDensity then
+                dens = math.clamp((tonumber(Options.StatsHUDShadowDensity.Value) or 60) / 100, 0, 1)
+            end
+            if shadowHolder then
+                shadowHolder.Visible = on
+            end
+            for i, l in ipairs(shadowLayers) do
+                l.Frame.BackgroundTransparency = math.clamp(1 - l.Alpha * dens, 0, 1)
+            end
+        end
+        applyShadow()
+
         avatar = Instance.new('ImageLabel')
         avatar.Name = 'Avatar'
         avatar.BackgroundColor3 = Color3.fromRGB(32, 34, 42)
         avatar.BorderSizePixel = 0
         avatar.ScaleType = Enum.ScaleType.Crop
         avatar.Image = ''
+        avatar.ZIndex = 3
         avatar.Parent = card
         local avatarCorner = Instance.new('UICorner')
         avatarCorner.CornerRadius = UDim.new(0, 12)
@@ -36228,6 +36657,7 @@ end)()
         line1.TextYAlignment = Enum.TextYAlignment.Center
         line1.TextColor3 = Color3.fromRGB(232, 236, 244)
         line1.RichText = true
+        line1.ZIndex = 3
         line1.Text = '游玩时长  0s'
         line1.Parent = card
 
@@ -36238,6 +36668,7 @@ end)()
         line2.TextYAlignment = Enum.TextYAlignment.Center
         line2.TextColor3 = Color3.fromRGB(232, 236, 244)
         line2.RichText = true
+        line2.ZIndex = 3
         line2.Text = '击杀 0    死亡 0'
         line2.Parent = card
 
@@ -36262,6 +36693,9 @@ end)()
                 card.Position = UDim2.new(
                     startPos.X.Scale, startPos.X.Offset + delta.X,
                     startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+                if syncShadow then
+                    syncShadow()
+                end
             end
         end)
 
@@ -36300,22 +36734,68 @@ end)()
         Tooltip = '显示头像 + 游玩时长 + 击杀 / 死亡；卡片可以用鼠标拖动',
     })
     Options.KillStatName = WXDrop(WXGroupStats, 'KillStatName', {
-        Values = { '自动', '本地估算', 'Kills', 'KOs', 'KO', '击杀', '击杀数', 'Kills（击杀）', 'Frags', 'Eliminations' },
+        Values = { '自动', '播报', '本地估算', 'Kills', 'KOs', 'KO', '击杀', '击杀数', 'Kills（击杀）', 'Frags', 'Eliminations' },
         Default = 1,
         Multi = false,
         Text = '击杀来源',
-        Tooltip = '自动 = 在 leaderstats 里找名字像击杀的项；本地估算 = 靠“打掉血 + 旁边没人抢”推算（可能偏差）；也可以直接指定统计名',
+        Tooltip = '自动 = 跟屏幕上那行击杀播报同一条判定（播报说击杀了就 +1）；本地估算 = 不读播报，靠打掉血推算；也可以直接指定 leaderstats 统计名',
     })
     Options.StatsHUDScale = WXGroupStats:AddSlider('StatsHUDScale', {
         Text = '大小', Default = 100, Min = 60, Max = 160, Rounding = 0, Suffix = ' %', Compact = false,
+    })
+    Toggles.StatsHUDShadowOn = WXGroupStats:AddToggle('StatsHUDShadowOn', {
+        Text = '卡片阴影',
+        Default = true,
+        Tooltip = '卡片背后那一圈柔和的黑色投影',
+    })
+    Options.StatsHUDShadowDensity = WXGroupStats:AddSlider('StatsHUDShadowDensity', {
+        Text = '阴影浓度', Default = 60, Min = 0, Max = 100, Rounding = 0, Suffix = ' %', Compact = false,
     })
     WXGroupStats:AddButton({
         Text = '重置位置',
         Func = function()
             if card then
                 card.Position = UDim2.new(0, 24, 0.5, 60)
+                if syncShadow then
+                    syncShadow()
+                end
                 savePos()
             end
+        end,
+    })
+    WXGroupStats:AddButton({
+        Text = '打印统计数据（查击杀来源）',
+        Func = function()
+            local out = {}
+            local ls = LP:FindFirstChild('leaderstats')
+            if ls then
+                for _, v in ipairs(ls:GetChildren()) do
+                    local ok, val = pcall(function()
+                        return v.Value
+                    end)
+                    table.insert(out, v.Name .. '=' .. tostring(ok and val or '?'))
+                end
+                if #out == 0 then
+                    table.insert(out, 'leaderstats 是空的')
+                end
+            else
+                table.insert(out, '没有 leaderstats')
+            end
+            local attrs = {}
+            for k in pairs(LP:GetAttributes()) do
+                table.insert(attrs, tostring(k))
+            end
+            table.sort(attrs)
+            if #attrs > 0 then
+                table.insert(out, '属性:' .. table.concat(attrs, ','))
+            end
+            local msg = table.concat(out, '  |  ')
+            print('[YZ] 统计数据 = ' .. msg)
+            print('[YZ] 击杀来源设置 = ' .. tostring(Options.KillStatName and Options.KillStatName.Value))
+            print('[YZ] 识别到的击杀项 = ' .. tostring(killStat and killStat:GetFullName() or '无，正在本地估算'))
+            pcall(function()
+                Library:Notify({ Title = '统计数据', Description = msg, Time = 15 })
+            end)
         end,
     })
 
@@ -36336,6 +36816,18 @@ end)()
         pcall(applyLayout)
     end)
 
+    Toggles.StatsHUDShadowOn:OnChanged(function()
+        if applyShadow then
+            pcall(applyShadow)
+        end
+    end)
+
+    Options.StatsHUDShadowDensity:OnChanged(function()
+        if applyShadow then
+            pcall(applyShadow)
+        end
+    end)
+
     ----------------------------------------------------------------------
     -- 数据
     ----------------------------------------------------------------------
@@ -36348,6 +36840,25 @@ end)()
             killStat = findKillStat()
             pcall(refreshText)
         end)
+    end
+
+    -- 主判定：直接接在脚本自己的击杀播报（BoarsAddKillfeed）上——
+    -- 播报响了「击杀」，这里就 +1，跟屏幕上看到的完全一致。
+    local prevFeedHook = _G.BoarsAddKillfeed
+    _G.BoarsAddKillfeed = function(killer, victim, weapon, isHead, dist, extra)
+        if prevFeedHook then
+            pcall(prevFeedHook, killer, victim, weapon, isHead, dist, extra)
+        end
+        if extra and extra.kind == 'hit' then
+            return
+        end
+        local pick = Options.KillStatName and Options.KillStatName.Value
+        if pick == '本地估算' then
+            return
+        end
+        if victim and victim ~= LP and (killer == LP or killer == nil) then
+            addKill(victim)
+        end
     end
 
     pcall(hookSelf)
@@ -36366,6 +36877,9 @@ end)()
     task.spawn(function()
         while true do
             task.wait(0.5)
+            if syncShadow then
+                pcall(syncShadow)
+            end
             if Toggles.StatsHUD and Toggles.StatsHUD.Value then
                 pcall(refreshText)
             end
