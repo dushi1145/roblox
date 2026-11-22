@@ -21855,6 +21855,10 @@ ESP_Tab:AddLabel('透视类型')
 Toggles.ESPHighlight = ESP_Tab:AddToggle('ESPHighlight', { Text = '高亮', Default = false })
 Toggles.ESPBox = ESP_Tab:AddToggle('ESPBox', { Text = '方框', Default = false })
 Toggles.ESPName = ESP_Tab:AddToggle('ESPName', { Text = '名称', Default = false })
+Options.NameTagShadow = ESP_Tab:AddSlider('NameTagShadow', {
+    Text = '名牌阴影', Default = 60, Min = 0, Max = 100, Rounding = 0, Suffix = ' %', Compact = false,
+    Tooltip = '名牌文字周围黑色阴影的浓度；0 = 完全不要阴影，100 = 最重',
+})
 Options.NameTagStyle = WXDrop(ESP_Tab, 'NameTagStyle', {
     Values = { '经典胶囊', '三段式（血 · 名 · 距）' },
     Default = 1,
@@ -21883,7 +21887,7 @@ local TargetESPDep = TargetESP_Tab:AddDependencyBox()
 TargetESPDep:SetupDependencies({ { Toggles.TargetESP, true } })
 
 Options.TargetESPMode = WXDrop(TargetESPDep, 'TargetESPMode', {
-    Values = { 'Client', 'Wexside', 'Призраки' },
+    Values = { 'Client', 'Wexside', 'Призраки', '扫描' },
     Default = 1,
     Multi = false,
     Text = '模式'
@@ -24569,12 +24573,30 @@ for j = 1, GHOST_COUNT do
     table.insert(ghostsLower, imgL)
 end
 
+-- 扫描模式：一束从下往上（再从上往下）扫过身体的横线
+local SCAN_LINES = 18
+local scanLines = {}
+for j = 1, SCAN_LINES do
+    local bar = Instance.new('Frame')
+    bar.Name = 'ScanLine_' .. j
+    bar.BackgroundColor3 = Color3.new(1, 1, 1)
+    bar.BorderSizePixel = 0
+    bar.AnchorPoint = Vector2.new(0, 0.5)
+    bar.Visible = false
+    bar.ZIndex = 49
+    bar.Parent = targetEspGui
+    scanLines[j] = bar
+end
+
 local function hideAllTargetESP()
     targetClientImg.Visible = false
     targetSkullImg.Visible = false
     for j = 1, GHOST_COUNT do
         ghostsUpper[j].Visible = false
         ghostsLower[j].Visible = false
+    end
+    for j = 1, SCAN_LINES do
+        scanLines[j].Visible = false
     end
 end
 
@@ -24660,6 +24682,58 @@ local function updateTargetESP(dt)
             targetSkullImg.Visible = true
         else
             targetSkullImg.Visible = false
+        end
+
+    elseif mode == '扫描' then
+        targetClientImg.Visible = false
+        targetSkullImg.Visible = false
+        for j = 1, GHOST_COUNT do
+            ghostsUpper[j].Visible = false
+            ghostsLower[j].Visible = false
+        end
+
+        local head = targetChar:FindFirstChild('Head')
+        local hrp = targetChar:FindFirstChild('HumanoidRootPart') or rootPart
+        local sTop, onTop = Camera:WorldToViewportPoint(head and (head.Position + Vector3.new(0, 0.9, 0)) or targetCenterPos)
+        local sBot, onBot = Camera:WorldToViewportPoint(hrp.Position - Vector3.new(0, 2.6, 0))
+        if not (onTop and onBot) or not head then
+            for j = 1, SCAN_LINES do
+                scanLines[j].Visible = false
+            end
+            return
+        end
+
+        local boxH = math.max(sBot.Y - sTop.Y, 14)
+        local boxW = boxH * 0.52
+        local leftX = sTop.X - boxW / 2
+
+        -- 上下往复：0 → 1 → 0
+        local phase = (tick() * (speed * 0.35)) % 2
+        if phase > 1 then
+            phase = 2 - phase
+        end
+        local scanY = sTop.Y + boxH * phase
+        local band = math.max(boxH * 0.32, 6)
+        local bright = math.clamp(brightness / 255, 0, 1)
+
+        for j = 1, SCAN_LINES do
+            local bar = scanLines[j]
+            local ratio = (j - 0.5) / SCAN_LINES
+            local y = sTop.Y + boxH * ratio
+            local d = math.abs(y - scanY) / band
+            local a = (1 - math.clamp(d, 0, 1))
+            a = a * a * bright
+            if a <= 0.02 then
+                bar.Visible = false
+            else
+                bar.Visible = true
+                bar.Position = UDim2.fromOffset(leftX, y)
+                bar.Size = UDim2.fromOffset(boxW, 2)
+                bar.BackgroundColor3 = isRainbow
+                    and Color3.fromHSV((tick() * 0.5 + ratio * 0.35) % 1, 0.75, 1)
+                    or baseCol
+                bar.BackgroundTransparency = 1 - a * 0.85
+            end
         end
 
     elseif mode == 'Призраки' then
@@ -30649,17 +30723,11 @@ function WXBuildNameTagBar(player)
     bar.Size = UDim2.fromOffset(0, 26)
     bar.AutomaticSize = Enum.AutomaticSize.X
     bar.BackgroundColor3 = Color3.fromRGB(22, 24, 29)
-    bar.BackgroundTransparency = 0.08
+    bar.BackgroundTransparency = 1      -- 外层只当排布容器，不画底板
     bar.BorderSizePixel = 0
     bar.Visible = false
     bar.Parent = nameTagHolder
-    tagCorner(bar, 8)
-
-    local stroke = Instance.new('UIStroke')
-    stroke.Color = Color3.new(1, 1, 1)
-    stroke.Thickness = 1
-    stroke.Transparency = 0.78
-    stroke.Parent = bar
+    tagCorner(bar, 5)
 
     local padding = Instance.new('UIPadding')
     padding.PaddingLeft = UDim.new(0, 4)
@@ -30686,7 +30754,7 @@ function WXBuildNameTagBar(player)
         chip.BorderSizePixel = 0
         chip.LayoutOrder = order
         chip.Parent = bar
-        tagCorner(chip, 6)
+        tagCorner(chip, 3)
 
         local pad = Instance.new('UIPadding')
         pad.PaddingLeft = UDim.new(0, 5)
@@ -30730,10 +30798,11 @@ function WXBuildNameTagBar(player)
     hpLabel.LayoutOrder = 2
     hpLabel.Parent = hpChip
 
-    -- 中：名字
+    -- 中：名字（和左右一样，自己一块小牌，三块之间留缝）
+    local nameChip = makeChip(2, 'NameChip')
     local nameLabel = Instance.new('TextLabel')
     nameLabel.Name = 'Name'
-    nameLabel.Size = UDim2.fromOffset(0, 18)
+    nameLabel.Size = UDim2.fromOffset(0, 16)
     nameLabel.AutomaticSize = Enum.AutomaticSize.X
     nameLabel.BackgroundTransparency = 1
     nameLabel.Font = Enum.Font.GothamBold
@@ -30744,8 +30813,8 @@ function WXBuildNameTagBar(player)
     nameLabel.TextXAlignment = Enum.TextXAlignment.Center
     nameLabel.TextYAlignment = Enum.TextYAlignment.Center
     nameLabel.Text = tostring(player.DisplayName or player.Name)
-    nameLabel.LayoutOrder = 2
-    nameLabel.Parent = bar
+    nameLabel.LayoutOrder = 1
+    nameLabel.Parent = nameChip
 
     -- 右：距离
     local distChip = makeChip(3, 'DistChip')
@@ -30837,12 +30906,18 @@ function WXUpdateNameTag(pill, player, char, color)
 
     -- 被判定为脚本的玩家：名牌底色直接变红，方便一眼区分
     local isCheater = detectedCheaters and detectedCheaters[player] ~= nil
-    pill.BackgroundColor3 = isCheater and Color3.fromRGB(150, 26, 36) or Color3.fromRGB(24, 24, 28)
-    pill.BackgroundTransparency = isCheater and 0.02 or 0.1
-    local pillStroke = pill:FindFirstChildOfClass('UIStroke')
-    if pillStroke then
-        pillStroke.Color = isCheater and Color3.fromRGB(255, 96, 96) or Color3.new(1, 1, 1)
-        pillStroke.Transparency = isCheater and 0.45 or 0.72
+    local nameChip = pill:FindFirstChild('NameChip')
+    if nameChip then
+        -- 三段式：外层没有底板，红色直接打到名字那块小牌上
+        nameChip.BackgroundColor3 = isCheater and Color3.fromRGB(150, 26, 36) or Color3.fromRGB(10, 11, 14)
+    else
+        pill.BackgroundColor3 = isCheater and Color3.fromRGB(150, 26, 36) or Color3.fromRGB(24, 24, 28)
+        pill.BackgroundTransparency = isCheater and 0.02 or 0.1
+        local pillStroke = pill:FindFirstChildOfClass('UIStroke')
+        if pillStroke then
+            pillStroke.Color = isCheater and Color3.fromRGB(255, 96, 96) or Color3.new(1, 1, 1)
+            pillStroke.Transparency = isCheater and 0.45 or 0.72
+        end
     end
 
     if dot then
@@ -30853,6 +30928,15 @@ function WXUpdateNameTag(pill, player, char, color)
         local prefix = isCheater and '[hacker] ' or ''
         nameLabel.Text = prefix .. tostring(player.DisplayName or player.Name)
         nameLabel.TextColor3 = isCheater and Color3.fromRGB(255, 236, 236) or Color3.new(1, 1, 1)
+    end
+
+    -- 阴影（文字黑色描边）强度：0 = 完全不要，100 = 最重
+    local shadowVal = math.clamp((tonumber(Options.NameTagShadow and Options.NameTagShadow.Value) or 60) / 100, 0, 1)
+    for _, lb in ipairs({ nameLabel, hpLabel, distLabel }) do
+        if lb then
+            lb.TextStrokeColor3 = Color3.new(0, 0, 0)
+            lb.TextStrokeTransparency = 1 - shadowVal
+        end
     end
 
     if distLabel then
@@ -36232,18 +36316,23 @@ end)()
     end)
 end)()
 
--- ====================== 人物披风（可自定义图片 + 丝滑布料摆动） ======================
--- 身后挂一块披风：默认多段布料，跑动时向后飘、站着轻微摆动（类似 MC 光影/mod 的丝滑感）；
--- 也可以关掉「丝滑布料」变成一整块硬板。
--- 图片用贴图 ID（rbxassetid://xxx），会按段数切成竖条拼起来，所以整张图是连贯的。
+-- ====================== 人物披风（纯色布料 + 丝滑摆动 + 本地图片） ======================
+-- 身后挂一块披风：多段布料，跑动时向后飘、站着轻微摆动（类似 MC 光影/mod 的丝滑感）。
+-- 材质默认纯色；想看图案就把图片丢进执行器工作区的 YZ_HUB/cape/ 里（名字用 cape.png），
+-- 再点「刷新披风图片」即可。图片会按段数切成竖条拼起来，整张图是连贯的。
 -- 注意：客户端创建，只有你自己看得见。
 ; (function()
     local Workspace = game:GetService('Workspace')
-    local IMG_FILE = 'YZCapeImage.txt'
+
+    local ROOT_DIR = 'YZ_HUB'
+    local CAPE_DIR = 'YZ_HUB/cape'
+    local ID_FILE = 'YZ_HUB/cape/cape_id.txt'
+    local IMAGE_NAMES = { 'cape.png', 'cape.jpg', 'cape.jpeg' }
 
     local capeModel = nil
     local segments = {}
-    local imageId = ''
+    local imageAsset = ''
+    local imageSource = ''
     local pitch = 0
     local clock = 0
 
@@ -36265,6 +36354,57 @@ end)()
         return v
     end
 
+    -- 建好 YZ_HUB/cape 目录，方便用户直接往里丢图片
+    local function ensureDirs()
+        pcall(function()
+            if type(makefolder) ~= 'function' then
+                return
+            end
+            if type(isfolder) ~= 'function' or not isfolder(ROOT_DIR) then
+                makefolder(ROOT_DIR)
+            end
+            if type(isfolder) ~= 'function' or not isfolder(CAPE_DIR) then
+                makefolder(CAPE_DIR)
+            end
+            -- 老版本界面的背景图放在 YZHUB，这里也兼容一下
+            if type(isfolder) ~= 'function' or not isfolder('YZHUB/cape') then
+                pcall(makefolder, 'YZHUB/cape')
+            end
+        end)
+    end
+
+    -- 图片优先用文件夹里的本地文件，其次用 cape_id.txt 里记的贴图 ID
+    local function resolveImage()
+        for _, dir in ipairs({ CAPE_DIR, 'YZHUB/cape' }) do
+            for _, name in ipairs(IMAGE_NAMES) do
+                local path = dir .. '/' .. name
+                local ok, exists = pcall(function()
+                    return isfile and isfile(path)
+                end)
+                if ok and exists then
+                    local conv = getcustomasset or getsynasset or getasset
+                    if type(conv) == 'function' then
+                        local ok2, asset = pcall(conv, path)
+                        if ok2 and type(asset) == 'string' and #asset > 0 then
+                            return asset, path
+                        end
+                    end
+                end
+            end
+        end
+
+        local ok, raw = pcall(function()
+            if isfile and isfile(ID_FILE) then
+                return readfile(ID_FILE)
+            end
+        end)
+        if ok and type(raw) == 'string' and raw ~= '' then
+            return normalizeId(raw), ID_FILE
+        end
+
+        return '', ''
+    end
+
     local function clearCape()
         for _, seg in ipairs(segments) do
             if seg and seg.Parent then
@@ -36279,24 +36419,26 @@ end)()
     end
 
     -- 一段布：Part + 两面 SurfaceGui（同一条切片）
-    local function makeSegment(index, total, width, height, color)
+    -- partH 比 slotH 高一点，上下段落叠着，摆动时不会裂开缝隙
+    local function makeSegment(index, total, width, slotH, partH, capeLen, color)
         local part = Instance.new('Part')
         part.Name = 'YZCape' .. index
-        part.Size = Vector3.new(width, height, 0.06)
+        part.Size = Vector3.new(width, partH, 0.06)
         part.Anchored = true
         part.CanCollide = false
         part.CanQuery = false
         part.CanTouch = false
         part.CastShadow = false
         part.Massless = true
+        part.Material = Enum.Material.SmoothPlastic
+        part.Reflectance = 0
         part.TopSurface = Enum.SurfaceType.Smooth
         part.BottomSurface = Enum.SurfaceType.Smooth
         part.Color = color
-        part.Material = imageId ~= '' and Enum.Material.SmoothPlastic or Enum.Material.Fabric
         part.Transparency = 0
         part.Parent = capeModel
 
-        if imageId ~= '' then
+        if imageAsset ~= '' then
             for _, face in ipairs({ Enum.NormalId.Back, Enum.NormalId.Front }) do
                 local sg = Instance.new('SurfaceGui')
                 sg.Name = 'Face_' .. face.Name
@@ -36316,11 +36458,11 @@ end)()
                 local img = Instance.new('ImageLabel')
                 img.Name = 'Slice'
                 img.BackgroundTransparency = 1
-                img.Image = imageId
+                img.Image = imageAsset
                 img.ScaleType = Enum.ScaleType.Stretch
-                -- 把整张图铺满「整条披风」，再靠父级裁剪只露出这一段
-                img.Size = UDim2.fromScale(1, total)
-                img.Position = UDim2.fromScale(0, -(index - 1) / total)
+                -- 整张图铺满整条披风长度，再靠父级裁剪只露出这一段
+                img.Size = UDim2.fromScale(1, capeLen / partH)
+                img.Position = UDim2.fromScale(0, -((index - 1) * slotH) / partH)
                 img.Parent = clip
             end
         end
@@ -36343,24 +36485,27 @@ end)()
         local total = silky and math.floor(tonumber(Options.CapeSegments and Options.CapeSegments.Value) or 6) or 1
         total = math.clamp(total, 1, 8)
 
-        local color = (Options.CapeColor and Options.CapeColor.Value) or Color3.fromRGB(190, 40, 52)
+        local tint = Toggles.CapeTint == nil or Toggles.CapeTint.Value
+        local color = tint and ((Options.CapeColor and Options.CapeColor.Value) or Color3.fromRGB(190, 40, 52))
+            or Color3.fromRGB(245, 245, 245)
 
         capeModel = Instance.new('Model')
         capeModel.Name = 'YZCape'
         capeModel.Parent = char
 
         local torsoWidth = math.clamp(torso.Size.X * 0.95, 1.2, 3)
-        local len = 2.6
-        local segH = len / total
+        local capeLen = 2.6
+        local slotH = capeLen / total
+        local partH = slotH * 1.22      -- 上下重叠 22%，摆动不裂缝
 
         for i = 1, total do
-            segments[i] = makeSegment(i, total, torsoWidth, segH, color)
+            segments[i] = makeSegment(i, total, torsoWidth, slotH, partH, capeLen, color)
         end
 
         -- 先摆到身后，避免第一帧出现在世界原点
-        local baseCF = torso.CFrame * CFrame.new(0, torso.Size.Y * 0.32, torso.Size.Z * 0.52)
+        local baseCF = torso.CFrame * CFrame.new(0, torso.Size.Y * 0.34, torso.Size.Z * 0.78)
         for i, seg in ipairs(segments) do
-            seg.CFrame = baseCF * CFrame.new(0, -segH * (i - 0.5), 0)
+            seg.CFrame = baseCF * CFrame.new(0, -slotH * (i - 0.5), 0)
         end
     end
 
@@ -36383,170 +36528,43 @@ end)()
         local horiz = Vector3.new(vel.X, 0, vel.Z).Magnitude
         local falling = vel.Y < -12
 
-        -- 目标后仰角：跑得越快越向后飘，下落时也会被吹起来
         local target = math.clamp(horiz / 42, 0, 1) * math.rad(62)
         if falling then
             target = math.max(target, math.rad(26))
         end
         pitch = pitch + (target - pitch) * math.clamp(dt * 7, 0, 1)
 
-        -- 背后是 +Z（角色前方是 -Z）
-        local cf = torso.CFrame * CFrame.new(0, torso.Size.Y * 0.32, torso.Size.Z * 0.52)
+        -- 背后是 +Z（角色前方是 -Z）；再往外挪一点，避免摆动时插进身体
+        local cf = torso.CFrame * CFrame.new(0, torso.Size.Y * 0.34, torso.Size.Z * 0.78)
         cf = cf * CFrame.Angles(-pitch, 0, 0)
 
-        local segH = segments[1].Size.Y
+        local slotH = segments[1].Size.Y / 1.22
         local wobble = math.rad(1.6 + math.min(horiz, 40) * 0.09)
 
         for i, seg in ipairs(segments) do
             if #segments > 1 then
-                local a = math.sin(clock * 5.2 + i * 0.75) * wobble
-                local b = math.sin(clock * 3.3 + i * 0.55) * wobble * 0.55
-                cf = cf * CFrame.Angles(a, 0, b)
+                -- 角度只取负值（负 = 朝身后）：往后摆不会插进身体，只会在背后起伏
+                local back = -(math.rad(3) + (math.sin(clock * 5.2 + i * 0.75) * 0.5 + 0.5) * wobble)
+                local side = math.sin(clock * 3.3 + i * 0.55) * wobble * 0.4
+                cf = cf * CFrame.Angles(back, 0, side)
             end
-            seg.CFrame = cf * CFrame.new(0, -segH / 2, 0)
-            cf = cf * CFrame.new(0, -segH, 0)
+            seg.CFrame = cf * CFrame.new(0, -seg.Size.Y / 2, 0)
+            cf = cf * CFrame.new(0, -slotH, 0)
         end
     end
-
-    ----------------------------------------------------------------------
-    -- 图片设置面板
-    ----------------------------------------------------------------------
-    local imgGui, imgBox
-
-    local function openImagePanel()
-        if imgGui and imgGui.Parent then
-            imgGui.Enabled = true
-            if imgBox then
-                imgBox.Text = (imageId ~= '') and imageId or ''
-            end
-            return
-        end
-
-        imgGui = Instance.new('ScreenGui')
-        imgGui.Name = 'YZCapeInput'
-        imgGui.ResetOnSpawn = false
-        imgGui.IgnoreGuiInset = true
-        imgGui.DisplayOrder = 60
-        local host
-        local ok, h = pcall(function()
-            return gethui and gethui()
-        end)
-        imgGui.Parent = (ok and h) or LP:FindFirstChild('PlayerGui') or game:GetService('CoreGui')
-
-        local frame = Instance.new('Frame')
-        frame.Size = UDim2.fromOffset(300, 120)
-        frame.Position = UDim2.new(0.5, -150, 0.4, 0)
-        frame.BackgroundColor3 = Color3.fromRGB(20, 20, 24)
-        frame.BorderSizePixel = 0
-        frame.Parent = imgGui
-        local c = Instance.new('UICorner')
-        c.CornerRadius = UDim.new(0, 12)
-        c.Parent = frame
-        local s = Instance.new('UIStroke')
-        s.Color = Color3.fromRGB(70, 70, 82)
-        s.Thickness = 1
-        s.Parent = frame
-
-        local label = Instance.new('TextLabel')
-        label.Size = UDim2.new(1, -24, 0, 20)
-        label.Position = UDim2.fromOffset(12, 10)
-        label.BackgroundTransparency = 1
-        label.Font = Enum.Font.GothamMedium
-        label.TextSize = 13
-        label.TextXAlignment = Enum.TextXAlignment.Left
-        label.TextColor3 = Color3.fromRGB(210, 220, 235)
-        label.Text = '披风图片（贴图 ID 或 rbxassetid://…）'
-        label.Parent = frame
-
-        imgBox = Instance.new('TextBox')
-        imgBox.Size = UDim2.new(1, -24, 0, 30)
-        imgBox.Position = UDim2.fromOffset(12, 36)
-        imgBox.BackgroundColor3 = Color3.fromRGB(32, 32, 38)
-        imgBox.BorderSizePixel = 0
-        imgBox.Font = Enum.Font.Gotham
-        imgBox.TextSize = 13
-        imgBox.TextColor3 = Color3.fromRGB(230, 235, 245)
-        imgBox.PlaceholderText = '例如 1234567890'
-        imgBox.PlaceholderColor3 = Color3.fromRGB(120, 120, 132)
-        imgBox.ClearTextOnFocus = false
-        imgBox.Text = (imageId ~= '') and imageId or ''
-        imgBox.Parent = frame
-        local c2 = Instance.new('UICorner')
-        c2.CornerRadius = UDim.new(0, 8)
-        c2.Parent = imgBox
-        local p2 = Instance.new('UIPadding')
-        p2.PaddingLeft = UDim.new(0, 8)
-        p2.Parent = imgBox
-
-        local apply = Instance.new('TextButton')
-        apply.Size = UDim2.fromOffset(84, 30)
-        apply.Position = UDim2.new(1, -200, 1, -42)
-        apply.BackgroundColor3 = Color3.fromRGB(48, 110, 170)
-        apply.BorderSizePixel = 0
-        apply.Font = Enum.Font.GothamMedium
-        apply.TextSize = 13
-        apply.TextColor3 = Color3.fromRGB(240, 245, 255)
-        apply.Text = '应用'
-        apply.Parent = frame
-        local c3 = Instance.new('UICorner')
-        c3.CornerRadius = UDim.new(0, 8)
-        c3.Parent = apply
-
-        local clearBtn = Instance.new('TextButton')
-        clearBtn.Size = UDim2.fromOffset(84, 30)
-        clearBtn.Position = UDim2.fromOffset(12, 70)
-        clearBtn.BackgroundColor3 = Color3.fromRGB(46, 46, 54)
-        clearBtn.BorderSizePixel = 0
-        clearBtn.Font = Enum.Font.GothamMedium
-        clearBtn.TextSize = 13
-        clearBtn.TextColor3 = Color3.fromRGB(225, 230, 240)
-        clearBtn.Text = '清除图片'
-        clearBtn.Parent = frame
-        local c4 = Instance.new('UICorner')
-        c4.CornerRadius = UDim.new(0, 8)
-        c4.Parent = clearBtn
-
-        local function applyId()
-            imageId = normalizeId(imgBox.Text)
-            pcall(function()
-                writefile(IMG_FILE, imageId)
-            end)
-            pcall(buildCape)
-            notify(imageId == '' and '已清除披风图片（改用纯色布料）' or ('已应用图片：' .. imageId))
-        end
-
-        apply.MouseButton1Click:Connect(function()
-            pcall(applyId)
-        end)
-        imgBox.FocusLost:Connect(function(enter)
-            if enter then
-                pcall(applyId)
-            end
-        end)
-        clearBtn.MouseButton1Click:Connect(function()
-            imgBox.Text = ''
-            imageId = ''
-            pcall(function() writefile(IMG_FILE, '') end)
-            pcall(buildCape)
-        end)
-    end
-
-    -- 读上一次保存的图片
-    pcall(function()
-        if isfile and isfile(IMG_FILE) then
-            imageId = normalizeId(readfile(IMG_FILE))
-        end
-    end)
 
     ----------------------------------------------------------------------
     -- 界面
     ----------------------------------------------------------------------
+    ensureDirs()
+    imageAsset, imageSource = resolveImage()
+
     local CapeGroup = Tabs.Visuals:AddLeftGroupbox('人物披风')
 
     Toggles.CapeEnabled = CapeGroup:AddToggle('CapeEnabled', {
         Text = '启用披风',
         Default = false,
-        Tooltip = '在自己背后挂一块披风（只有你自己看得见，别人看不到）',
+        Tooltip = '在自己背后挂一块披风（只有你自己看得见）',
     })
     Toggles.CapeSilky = CapeGroup:AddToggle('CapeSilky', {
         Text = '丝滑布料',
@@ -36557,14 +36575,26 @@ end)()
         Text = '布料段数', Default = 6, Min = 3, Max = 8, Rounding = 0, Compact = false,
         Tooltip = '段数越多摆动越细，6 段是「丝滑」和性能的平衡点',
     })
+    Toggles.CapeTint = CapeGroup:AddToggle('CapeTint', {
+        Text = '披风上色',
+        Default = true,
+        Tooltip = '开：用下面的颜色给布料上色；关：用默认白布',
+    })
     do
-        local L = CapeGroup:AddLabel('布料颜色（无图片时）')
+        local L = CapeGroup:AddLabel('布料颜色')
         L:AddColorPicker('CapeColor', { Default = Color3.fromRGB(190, 40, 52), Title = '披风颜色' })
     end
     CapeGroup:AddButton({
-        Text = '设置披风图片…',
+        Text = '刷新披风图片',
         Func = function()
-            pcall(openImagePanel)
+            ensureDirs()
+            imageAsset, imageSource = resolveImage()
+            pcall(buildCape)
+            if imageAsset ~= '' then
+                notify('已加载披风图片：' .. imageSource)
+            else
+                notify('没找到图片，用纯色布料。把图丢进 YZ_HUB/cape/ 并命名为 cape.png 再点一次')
+            end
         end,
     })
 
@@ -36582,6 +36612,12 @@ end)()
         end
     end)
 
+    Toggles.CapeTint:OnChanged(function()
+        if Toggles.CapeEnabled and Toggles.CapeEnabled.Value then
+            pcall(buildCape)
+        end
+    end)
+
     Options.CapeSegments:OnChanged(function()
         if Toggles.CapeEnabled and Toggles.CapeEnabled.Value then
             pcall(buildCape)
@@ -36590,7 +36626,7 @@ end)()
 
     if Options.CapeColor and Options.CapeColor.OnChanged then
         Options.CapeColor:OnChanged(function()
-            if Toggles.CapeEnabled and Toggles.CapeEnabled.Value and imageId == '' then
+            if Toggles.CapeEnabled and Toggles.CapeEnabled.Value then
                 pcall(buildCape)
             end
         end)
