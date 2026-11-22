@@ -22318,51 +22318,51 @@ Options.PubgKillMsgDuration = KillMsgGroup:AddSlider('PubgKillMsgDuration', {
 })
 
 -- 掩体绘制（只画半径内那一段，按形状画，越远越淡）
-local CoverGroup = Tabs.Visuals:AddLeftGroupbox('掩体绘制')
+WXGroupCover = Tabs.Visuals:AddLeftGroupbox('掩体绘制')
 
-Toggles.CoverOutline = CoverGroup:AddToggle('CoverOutline', {
+Toggles.CoverOutline = WXGroupCover:AddToggle('CoverOutline', {
     Text = '启用掩体绘制',
     Default = false,
     Tooltip = '以自己为圆心，只描半径内的那一截；圆外部分不画，越靠边越淡',
 })
-Options.CoverOutlineRange = CoverGroup:AddSlider('CoverOutlineRange', {
+Options.CoverOutlineRange = WXGroupCover:AddSlider('CoverOutlineRange', {
     Text = '范围（格）', Default = 60, Min = 10, Max = 400, Rounding = 0, Compact = false,
     Tooltip = '圈的半径：圆内的墙体被描边，圆外的那截不画',
 })
-Toggles.CoverOutlineThroughWall = CoverGroup:AddToggle('CoverOutlineThroughWall', {
+Toggles.CoverOutlineThroughWall = WXGroupCover:AddToggle('CoverOutlineThroughWall', {
     Text = '绘制墙后（穿墙可见）',
     Default = true,
     Tooltip = '开：不判断遮挡，墙后 / 身后方向的掩体全都画出来；关：只画视线内看得见的（更省性能）',
 })
-Toggles.CoverOutlineOverlap = CoverGroup:AddToggle('CoverOutlineOverlap', {
+Toggles.CoverOutlineOverlap = WXGroupCover:AddToggle('CoverOutlineOverlap', {
     Text = '重叠绘制',
     Default = false,
     Tooltip = '开：同一个模型里嵌套的部件全都画（线条会重叠，树/建筑更完整）；关：只画最外层',
 })
-Toggles.CoverOutlineMesh = CoverGroup:AddToggle('CoverOutlineMesh', {
+Toggles.CoverOutlineMesh = WXGroupCover:AddToggle('CoverOutlineMesh', {
     Text = '网格模型按方块画',
     Default = true,
     Tooltip = '树 / 石头 / 建筑贴图模型这类拿不到真实形状，按包围盒画成方块；关掉就整类不画',
 })
-Toggles.CoverOutlineFarFade = CoverGroup:AddToggle('CoverOutlineFarFade', {
+Toggles.CoverOutlineFarFade = WXGroupCover:AddToggle('CoverOutlineFarFade', {
     Text = '远处变淡',
     Default = true,
     Tooltip = '越靠近圈的边缘越淡，到边界完全消失',
 })
-Toggles.CoverOutlineNearFade = CoverGroup:AddToggle('CoverOutlineNearFade', {
+Toggles.CoverOutlineNearFade = WXGroupCover:AddToggle('CoverOutlineNearFade', {
     Text = '近处变淡',
     Default = false,
     Tooltip = '越贴近自己越淡，免得脚边的线糊成一团',
 })
-Options.CoverOutlineOpacity = CoverGroup:AddSlider('CoverOutlineOpacity', {
+Options.CoverOutlineOpacity = WXGroupCover:AddSlider('CoverOutlineOpacity', {
     Text = '描边浓度', Default = 100, Min = 10, Max = 100, Rounding = 0, Suffix = ' %', Compact = false,
     Tooltip = '指自己身边的描边浓度，越靠近圈边越淡',
 })
-Options.CoverOutlineThickness = CoverGroup:AddSlider('CoverOutlineThickness', {
+Options.CoverOutlineThickness = WXGroupCover:AddSlider('CoverOutlineThickness', {
     Text = '描边粗细', Default = 2, Min = 1, Max = 6, Rounding = 0, Compact = false,
 })
 do
-    local L = CoverGroup:AddLabel('描边颜色')
+    local L = WXGroupCover:AddLabel('描边颜色')
     L:AddColorPicker('CoverOutlineColor', { Default = Color3.fromRGB(130, 205, 255), Title = '描边颜色' })
 end
 
@@ -24574,24 +24574,20 @@ for j = 1, GHOST_COUNT do
 end
 
 -- 扫描模式：3D 圆环贴着身体上下扫，拖影连成筒状把人整个包住
-local SCAN_SEGS = 20            -- 每圈多少段（越大越圆，10 段以上基本看不出棱角）
-local SCAN_TRAIL = 14           -- 拖影圈数（密排 + 加粗，叠成连续渐变）
-local SCAN_SWEEP = 3.6          -- 单趟基准用时（会除以速度滑块）
-local scanLines = {}
-local scanPrevUsed = 0
+WXScan = { segs = 20, trail = 14, sweep = 3.6, lines = {}, used = 0 }
 
-local function hideScanLines()
-    for i = 1, scanPrevUsed do
-        local ln = scanLines[i]
+function WXScanHide()
+    for i = 1, WXScan.used do
+        local ln = WXScan.lines[i]
         if ln then
             ln.Visible = false
         end
     end
-    scanPrevUsed = 0
+    WXScan.used = 0
 end
 
-local function getScanLine(i)
-    local ln = scanLines[i]
+function WXScanLine(i)
+    local ln = WXScan.lines[i]
     if not ln then
         local ok, obj = pcall(function()
             return Drawing.new('Line')
@@ -24603,14 +24599,14 @@ local function getScanLine(i)
         obj.Transparency = 1
         obj.ZIndex = 40
         obj.Visible = false
-        scanLines[i] = obj
+        WXScan.lines[i] = obj
         ln = obj
     end
     return ln
 end
 
 -- 扫描位置：0 = 脚下，1 = 头顶；三角波往复，两端用平滑曲线软停（不是硬卡住）
-local function scanPosAt(t, sweepT)
+function WXScanPos(t, sweepT)
     local cyc = sweepT * 2
     local u = (t % cyc) / cyc
     local tri = (u < 0.5) and (u * 2) or (2 - u * 2)
@@ -24625,7 +24621,7 @@ local function hideAllTargetESP()
         ghostsUpper[j].Visible = false
         ghostsLower[j].Visible = false
     end
-    hideScanLines()
+    WXScanHide()
 end
 
 local function updateTargetESP(dt)
@@ -24723,7 +24719,7 @@ local function updateTargetESP(dt)
         local head = targetChar:FindFirstChild('Head')
         local hrp = targetChar:FindFirstChild('HumanoidRootPart') or rootPart
         if not head or not hrp then
-            hideScanLines()
+            WXScanHide()
             return
         end
 
@@ -24734,7 +24730,7 @@ local function updateTargetESP(dt)
         end
         local radius = math.max(hrp.Size.X, hrp.Size.Z) * 0.5 + 0.45
         local bright = math.clamp(brightness / 255, 0, 1)
-        local sweepT = SCAN_SWEEP / math.max(speed, 0.2)
+        local sweepT = WXScan.sweep / math.max(speed, 0.2)
         local now = tick()
         local used = 0
         local alive = true
@@ -24749,7 +24745,7 @@ local function updateTargetESP(dt)
                 return
             end
             used = used + 1
-            local ln = getScanLine(used)
+            local ln = WXScanLine(used)
             if not ln then
                 alive = false
                 return
@@ -24763,12 +24759,12 @@ local function updateTargetESP(dt)
         end
 
         -- 拖影：一串密排的圆环，线画粗、透明度压很低，叠起来就是一条连续的渐变
-        for k = 1, SCAN_TRAIL do
-            local p = scanPosAt(now - (k - 1) * 0.02, sweepT)
+        for k = 1, WXScan.trail do
+            local p = WXScanPos(now - (k - 1) * 0.02, sweepT)
             local y = yBottom + (yTop - yBottom) * p
 
             local isHead = (k == 1)
-            local fade = (1 - (k - 1) / SCAN_TRAIL) ^ 1.15
+            local fade = (1 - (k - 1) / WXScan.trail) ^ 1.15
             local alpha = isHead and (bright * 0.95) or (bright * fade * 0.26)
             local thick = isHead and 2.6 or 3.2
             local col = isRainbow
@@ -24776,8 +24772,8 @@ local function updateTargetESP(dt)
                 or baseCol
 
             local firstPt, prevPt = nil, nil
-            for si = 0, SCAN_SEGS - 1 do
-                local ang = si / SCAN_SEGS * math.pi * 2
+            for si = 0, WXScan.segs - 1 do
+                local ang = si / WXScan.segs * math.pi * 2
                 local pt = Vector3.new(
                     hrp.Position.X + math.cos(ang) * radius,
                     y,
@@ -24794,13 +24790,13 @@ local function updateTargetESP(dt)
             end
         end
 
-        for i = used + 1, scanPrevUsed do
-            local ln = scanLines[i]
+        for i = used + 1, WXScan.used do
+            local ln = WXScan.lines[i]
             if ln then
                 ln.Visible = false
             end
         end
-        scanPrevUsed = used
+        WXScan.used = used
 
     elseif mode == 'Призраки' then
         targetClientImg.Visible = false
@@ -36208,17 +36204,17 @@ end)()
     ----------------------------------------------------------------------
     -- 界面
     ----------------------------------------------------------------------
-    local StatsGroup = Tabs.Visuals:AddRightGroupbox('数据卡片')
+    WXGroupStats = Tabs.Visuals:AddRightGroupbox('数据卡片')
 
-    Toggles.StatsHUD = StatsGroup:AddToggle('StatsHUD', {
+    Toggles.StatsHUD = WXGroupStats:AddToggle('StatsHUD', {
         Text = '显示数据卡片',
         Default = false,
         Tooltip = '显示头像 + 游玩时长 + 击杀 / 死亡；卡片可以用鼠标拖动',
     })
-    Options.StatsHUDScale = StatsGroup:AddSlider('StatsHUDScale', {
+    Options.StatsHUDScale = WXGroupStats:AddSlider('StatsHUDScale', {
         Text = '大小', Default = 100, Min = 60, Max = 160, Rounding = 0, Suffix = ' %', Compact = false,
     })
-    StatsGroup:AddButton({
+    WXGroupStats:AddButton({
         Text = '重置位置',
         Func = function()
             if card then
@@ -36350,14 +36346,14 @@ end)()
     ----------------------------------------------------------------------
     -- 界面
     ----------------------------------------------------------------------
-    local CamGroup = Tabs.Visuals:AddLeftGroupbox('移动相机')
+    WXGroupCam = Tabs.Visuals:AddLeftGroupbox('移动相机')
 
-    Toggles.CamLag = CamGroup:AddToggle('CamLag', {
+    Toggles.CamLag = WXGroupCam:AddToggle('CamLag', {
         Text = '启用移动相机',
         Default = false,
         Tooltip = '镜头位置比人慢半拍、平滑地追上来，人和准星照常跟手（只拖位置，不影响瞄准）',
     })
-    Options.CamLagAmount = CamGroup:AddSlider('CamLagAmount', {
+    Options.CamLagAmount = WXGroupCam:AddSlider('CamLagAmount', {
         Text = '延迟强度', Default = 45, Min = 0, Max = 100, Rounding = 0, Suffix = ' %', Compact = false,
         Tooltip = '越大镜头跟得越慢（0 = 几乎无延迟，100 = 明显拖影感）',
     })
@@ -36628,32 +36624,32 @@ end)()
     ensureDirs()
     imageAsset, imageSource = resolveImage()
 
-    local CapeGroup = Tabs.Visuals:AddLeftGroupbox('人物披风')
+    WXGroupCape = Tabs.Visuals:AddLeftGroupbox('人物披风')
 
-    Toggles.CapeEnabled = CapeGroup:AddToggle('CapeEnabled', {
+    Toggles.CapeEnabled = WXGroupCape:AddToggle('CapeEnabled', {
         Text = '启用披风',
         Default = false,
         Tooltip = '在自己背后挂一块披风（只有你自己看得见）',
     })
-    Toggles.CapeSilky = CapeGroup:AddToggle('CapeSilky', {
+    Toggles.CapeSilky = WXGroupCape:AddToggle('CapeSilky', {
         Text = '丝滑布料',
         Default = true,
         Tooltip = '开：多段布料，跑动向后飘、站着轻摆；关：一整块硬板',
     })
-    Options.CapeSegments = CapeGroup:AddSlider('CapeSegments', {
+    Options.CapeSegments = WXGroupCape:AddSlider('CapeSegments', {
         Text = '布料段数', Default = 6, Min = 3, Max = 8, Rounding = 0, Compact = false,
         Tooltip = '段数越多摆动越细，6 段是「丝滑」和性能的平衡点',
     })
-    Toggles.CapeTint = CapeGroup:AddToggle('CapeTint', {
+    Toggles.CapeTint = WXGroupCape:AddToggle('CapeTint', {
         Text = '披风上色',
         Default = true,
         Tooltip = '开：用下面的颜色给布料上色；关：用默认白布',
     })
     do
-        local L = CapeGroup:AddLabel('布料颜色')
+        local L = WXGroupCape:AddLabel('布料颜色')
         L:AddColorPicker('CapeColor', { Default = Color3.fromRGB(190, 40, 52), Title = '披风颜色' })
     end
-    CapeGroup:AddButton({
+    WXGroupCape:AddButton({
         Text = '刷新披风图片',
         Func = function()
             ensureDirs()
@@ -36904,16 +36900,16 @@ end)()
     ----------------------------------------------------------------------
     -- 界面
     ----------------------------------------------------------------------
-    local WeatherGroup = Tabs.Visuals:AddRightGroupbox('天气')
+    WXGroupWeather = Tabs.Visuals:AddRightGroupbox('天气')
 
-    Options.WeatherKind = WXDrop(WeatherGroup, 'WeatherKind', {
+    Options.WeatherKind = WXDrop(WXGroupWeather, 'WeatherKind', {
         Values = { '关闭', '下雨', '下雪' },
         Default = 1,
         Multi = false,
         Text = '天气',
         Tooltip = '纯客户端效果，只有你自己看得到；粒子跟着相机走，走到哪下到哪',
     })
-    Options.WeatherPower = WeatherGroup:AddSlider('WeatherPower', {
+    Options.WeatherPower = WXGroupWeather:AddSlider('WeatherPower', {
         Text = '降水强度', Default = 60, Min = 10, Max = 100, Rounding = 0, Suffix = ' %', Compact = false,
         Tooltip = '越大雨越密 / 雪越大',
     })
