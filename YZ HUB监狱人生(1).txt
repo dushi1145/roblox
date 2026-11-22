@@ -22176,7 +22176,17 @@ Options.TargetHUDOpacity = TargetHUD_Tab:AddSlider('TargetHUDOpacity', {
 Options.TargetHUDScale = TargetHUD_Tab:AddSlider('TargetHUDScale', {
     Text = '大小', Default = 100, Min = 60, Max = 160, Rounding = 0, Suffix = ' %', Compact = false
 })
+Toggles.TargetHUDAttach = TargetHUD_Tab:AddToggle('TargetHUDAttach', {
+    Text = '吸附到目标右侧',
+    Default = false,
+    Tooltip = '卡片跟着目标走、贴在人物右侧，并按距离自动缩放（远处不会太小、近处不会太大）；开启后手动拖动不生效',
+})
 
+Toggles.TargetHUDShadowOn = TargetHUD_Tab:AddToggle('TargetHUDShadowOn', {
+    Text = '卡片阴影',
+    Default = true,
+    Tooltip = '卡片下方那层柔和投影；关掉就是纯平面卡片',
+})
 Options.TargetHUDShadow = TargetHUD_Tab:AddSlider('TargetHUDShadow', {
     Text = '阴影范围', Default = 50, Min = 0, Max = 100, Rounding = 0, Suffix = ' %', Compact = false,
     Tooltip = '数值越大，阴影往外扩得越远'
@@ -33533,6 +33543,18 @@ end
     hudRoot.Visible = false
     hudRoot.Parent = hudGui
 
+    -- 吸附模式关掉时，回到用户手动摆的位置
+    local manualPos = defaultPos
+    if Toggles.TargetHUDAttach then
+        Toggles.TargetHUDAttach:OnChanged(function(v)
+            if not v then
+                hudRoot.Position = manualPos
+                -- 恢复成滑块的固定大小
+                hudScale.Scale = math.clamp((tonumber(Options.TargetHUDScale and Options.TargetHUDScale.Value) or 100) / 100, 0.5, 2)
+            end
+        end)
+    end
+
     local hudScale = Instance.new('UIScale')
     hudScale.Scale = 1
     hudScale.Parent = hudRoot
@@ -33598,7 +33620,7 @@ end
         layer.Position = UDim2.fromOffset(-pad, -pad + 2)
         addCorner(layer, 16 + pad * 0.8)
         layer.Parent = shadowHolder
-        local alpha = 0.024 * (1 - (i - 1) / (SHADOW_LAYERS - 1))
+        local alpha = 0.04 * (1 - (i - 1) / (SHADOW_LAYERS - 1))
         shadowLayers[i] = { Frame = layer, Base = 1 - alpha }
     end
 
@@ -33799,6 +33821,7 @@ end
                 dragStartFramePos.Y.Scale,
                 dragStartFramePos.Y.Offset + delta.Y
             )
+            manualPos = hudRoot.Position
         end
     end)
 
@@ -33909,7 +33932,7 @@ end
             cardBorder.BackgroundTransparency = 1
             edgeStroke.Color = Color3.fromRGB(64, 64, 74)
         else
-            cardStroke.Transparency = 1 - (0.9 * (1 - opacity * 0.6))
+            cardStroke.Transparency = 1      -- 去掉外圈白色描边
             cardBorder.BackgroundTransparency = 0.35
             edgeStroke.Color = Color3.fromRGB(16, 16, 20)
         end
@@ -34176,6 +34199,27 @@ end
     -- 阴影逐帧跟随卡片：位置、尺寸、缩放、淡入淡出
     local shadowConn = RunService.RenderStepped:Connect(function()
         pcall(function()
+            -- 吸附模式：贴在目标右侧，按距离自动缩放（远处不会太小、近处不会太大）
+            if Toggles.TargetHUDAttach and Toggles.TargetHUDAttach.Value then
+                local tch = displayTarget and displayTarget.Character
+                local tHead = tch and (tch:FindFirstChild('Head') or tch:FindFirstChild('HumanoidRootPart'))
+                local cam = workspace.CurrentCamera
+                if tHead and cam then
+                    local sp, onScreen = cam:WorldToViewportPoint(tHead.Position + Vector3.new(0, 0.25, 0))
+                    if onScreen and sp.Z > 0 then
+                        local dist = (cam.CFrame.Position - tHead.Position).Magnitude
+                        local distScale = math.clamp(20 / math.max(dist, 1), 0.70, 1.25)
+                        local userScale = (tonumber(Options.TargetHUDScale and Options.TargetHUDScale.Value) or 100) / 100
+                        hudScale.Scale = distScale * userScale
+
+                        local cardH = (hudRoot.Size.Y.Offset > 0 and hudRoot.Size.Y.Offset or CARD_H_BASE) * hudScale.Scale
+                        hudRoot.Position = UDim2.fromOffset(sp.X + 46 * distScale, sp.Y - cardH * 0.5)
+                    else
+                        hudRoot.Position = UDim2.fromOffset(-10000, -10000)
+                    end
+                end
+            end
+
             shadowHolder.Position = hudRoot.Position
             shadowHolder.Size = hudRoot.Size
             shadowScale.Scale = hudScale.Scale
@@ -34191,7 +34235,8 @@ end
                 alpha = hudRoot.Visible and 1 or 0
             end
 
-            shadowHolder.Visible = alpha > 0.02
+            local shadowOn = not (Toggles.TargetHUDShadowOn and Toggles.TargetHUDShadowOn.Value == false)
+            shadowHolder.Visible = shadowOn and alpha > 0.02
             edgeFrame.Visible = alpha > 0.02
             edgeStroke.Transparency = themeDarkNow and 1 or (1 - (0.65 * alpha))
             if shadowHolder.Visible then
@@ -36317,6 +36362,13 @@ end)()
             smoothPos = target.Position
         end
 
+        -- 限制最大偏移：左右平移时镜头只轻微滞后，人始终留在画面中央附近（不会被甩出去）
+        local off = smoothPos - target.Position
+        local maxOff = 0.8 + (tonumber(Options.CamLagAmount and Options.CamLagAmount.Value) or 45) / 100 * 1.4
+        if off.Magnitude > maxOff then
+            smoothPos = target.Position + off.Unit * maxOff
+        end
+
         -- 位置用平滑后的，朝向保持即时，保证瞄准不受影响
         cam.CFrame = CFrame.new(smoothPos) * target.Rotation
     end
@@ -36820,7 +36872,7 @@ end)()
         rainE.EmissionDirection = Enum.NormalId.Bottom
         rainE.Orientation = Enum.ParticleOrientation.VelocityParallel
         rainE.Lifetime = NumberRange.new(0.85)
-        rainE.Speed = NumberRange.new(105, 125)
+        rainE.Speed = NumberRange.new(90, 110)
         rainE.SpreadAngle = Vector2.new(1.5, 1.5)
         rainE.Acceleration = Vector3.new(0, -25, 0)
         rainE.Drag = 0
@@ -36829,13 +36881,13 @@ end)()
         rainE.Rate = 0
         rainE.Enabled = false
         rainE.Size = NumberSequence.new({
-            NumberSequenceKeypoint.new(0, 2.4),
-            NumberSequenceKeypoint.new(1, 2.0),
+            NumberSequenceKeypoint.new(0, 0.85),
+            NumberSequenceKeypoint.new(1, 0.7),
         })
         rainE.Transparency = NumberSequence.new({
-            NumberSequenceKeypoint.new(0, 0.35),
-            NumberSequenceKeypoint.new(0.7, 0.45),
-            NumberSequenceKeypoint.new(1, 0.75),
+            NumberSequenceKeypoint.new(0, 0.5),
+            NumberSequenceKeypoint.new(0.7, 0.62),
+            NumberSequenceKeypoint.new(1, 0.85),
         })
         rainE.Color = ColorSequence.new(Color3.fromRGB(188, 214, 255))
         rainE.Parent = rig
@@ -36867,6 +36919,9 @@ end)()
         snowE.Parent = rig
     end
 
+    -- 掩体检测：头顶 40 格内有遮挡 → 判定为室内，暂停降水
+    local sheltered = false
+
     local function apply()
         local kind = Options.WeatherKind and Options.WeatherKind.Value or '关闭'
         local power = math.clamp((tonumber(Options.WeatherPower and Options.WeatherPower.Value) or 60) / 100, 0.05, 1)
@@ -36884,13 +36939,14 @@ end)()
         end
 
         ensureRig()
+        local mul = sheltered and 0 or 1
         if kind == '下雨' then
-            rainE.Rate = math.floor(700 * power)
+            rainE.Rate = math.floor(700 * power) * mul
             rainE.Enabled = true
             snowE.Enabled = false
             snowE.Rate = 0
         else
-            snowE.Rate = math.floor(180 * power)
+            snowE.Rate = math.floor(180 * power) * mul
             snowE.Enabled = true
             rainE.Enabled = false
             rainE.Rate = 0
@@ -36938,6 +36994,34 @@ end)()
 
     task.defer(function()
         pcall(apply)
+    end)
+
+    -- 每 0.4 秒检查头顶有没有遮挡，进屋 / 进掩体自动停雨停雪
+    local shelterParams = RaycastParams.new()
+    shelterParams.FilterType = Enum.RaycastFilterType.Exclude
+    task.spawn(function()
+        while true do
+            task.wait(0.4)
+            local cam = Workspace.CurrentCamera
+            if cam and rig and rig.Parent then
+                local ex = { rig }
+                if LP.Character then
+                    ex[#ex + 1] = LP.Character
+                end
+                for _, pl in ipairs(Players:GetPlayers()) do
+                    if pl.Character then
+                        ex[#ex + 1] = pl.Character
+                    end
+                end
+                shelterParams.FilterDescendantsInstances = ex
+                local hit = Workspace:Raycast(cam.CFrame.Position + Vector3.new(0, 2, 0), Vector3.new(0, 40, 0), shelterParams)
+                local nowShelter = hit ~= nil
+                if nowShelter ~= sheltered then
+                    sheltered = nowShelter
+                    pcall(apply)
+                end
+            end
+        end
     end)
 end)()
 
