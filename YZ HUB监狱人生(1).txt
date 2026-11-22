@@ -37057,8 +37057,17 @@ end)()
     local segments = {}
     local imageAsset = ''
     local imageSource = ''
-    local pitch = 0
     local clock = 0
+    -- 每段布的弹簧状态：后仰角 / 侧甩角 及其角速度（超绝布料的核心）
+    local dynBack, dynBackV, dynSide, dynSideV = {}, {}, {}, {}
+
+    local function capeMode()
+        local m = Options.CapeMode and Options.CapeMode.Value
+        if m == '超绝布料' or m == '硬板' or m == '丝滑' then
+            return m
+        end
+        return '丝滑'
+    end
 
     local function notify(msg)
         pcall(function()
@@ -37205,9 +37214,12 @@ end)()
             return
         end
 
-        local silky = Toggles.CapeSilky == nil or Toggles.CapeSilky.Value
-        local total = silky and math.floor(tonumber(Options.CapeSegments and Options.CapeSegments.Value) or 6) or 1
-        total = math.clamp(total, 1, 8)
+        local mode = capeMode()
+        local total = 1
+        if mode ~= '硬板' then
+            total = math.floor(tonumber(Options.CapeSegments and Options.CapeSegments.Value) or 6)
+            total = math.clamp(total, 3, 8)
+        end
 
         local tint = Toggles.CapeTint == nil or Toggles.CapeTint.Value
         local color = tint and ((Options.CapeColor and Options.CapeColor.Value) or Color3.fromRGB(190, 40, 52))
@@ -37220,7 +37232,7 @@ end)()
         local torsoWidth = math.clamp(torso.Size.X * 1.05, 1.4, 3.2)
         local capeLen = 2.6
         local slotH = capeLen / total
-        local partH = slotH * 1.22      -- 上下重叠 22%，摆动不裂缝
+        local partH = slotH * 1.42      -- 上下多叠 42%，弯到任何角度都不会露出缝
 
         for i = 1, total do
             segments[i] = makeSegment(i, total, torsoWidth, slotH, partH, capeLen, color)
@@ -37248,35 +37260,86 @@ end)()
 
         clock = clock + dt
 
+        local mode = capeMode()
         local vel = root.AssemblyLinearVelocity
-        local horiz = Vector3.new(vel.X, 0, vel.Z).Magnitude
+        local flat = Vector3.new(vel.X, 0, vel.Z)
+        local horiz = flat.Magnitude
         local falling = vel.Y < -12
 
-        local target = math.clamp(horiz / 42, 0, 1) * math.rad(62)
+        -- 后仰目标：跑得越快越往后飘，下坠时兜起来
+        local targetBack = math.clamp(horiz / 42, 0, 1) * math.rad(62)
         if falling then
-            target = math.max(target, math.rad(26))
+            targetBack = math.max(targetBack, math.rad(30))
         end
-        pitch = pitch + (target - pitch) * math.clamp(dt * 7, 0, 1)
+        -- 侧甩目标：横向速度（左右平移 / 侧跳）让布往反方向甩，这就是 X 轴的丝滑
+        local right = torso.CFrame.RightVector
+        local lat = flat:Dot(right)
+        local targetSide = math.clamp(-lat / 38, -1, 1) * math.rad(28)
+
+        local total = #segments
+        local slotH = segments[1].Size.Y / 1.42
+
+        -- 弹簧参数：超绝布料更软、阻尼更小（会过冲，像真布）；硬板硬但也会动
+        local stiff, damp
+        if mode == '超绝布料' then
+            stiff, damp = 52, 5.2
+        elseif mode == '硬板' then
+            stiff, damp = 120, 13
+        else
+            stiff, damp = 95, 9.5
+        end
+
+        for i = 1, total do
+            local t = (total > 1) and ((i - 1) / (total - 1)) or 0
+            -- 越往下越软：甩出来的是一条弧线而不是一块斜板
+            local soft = 1 - 0.62 * t
+            local w = stiff * soft
+            local d = damp * (0.75 + 0.35 * t)
+
+            local tb, ts
+            if total > 1 then
+                tb = (targetBack / total) * (0.55 + 0.95 * t)
+                ts = (targetSide / total) * (0.45 + 1.05 * t)
+            else
+                tb = targetBack
+                ts = targetSide
+            end
+
+            -- 站着的时候也有一点自己的呼吸摆动
+            local idle = (mode == '硬板') and 0.006 or 0.014
+            tb = tb + math.sin(clock * 2.1 + i * 0.8) * idle
+            ts = ts + math.sin(clock * 1.7 + i * 1.1) * idle * 0.8
+
+            local b = dynBack[i] or 0
+            local bv = dynBackV[i] or 0
+            bv = bv + (tb - b) * w * dt
+            bv = bv * math.max(0, 1 - d * dt)
+            b = b + bv * dt
+
+            local s = dynSide[i] or 0
+            local sv = dynSideV[i] or 0
+            sv = sv + (ts - s) * w * dt
+            sv = sv * math.max(0, 1 - d * dt)
+            s = s + sv * dt
+
+            dynBack[i], dynBackV[i] = b, bv
+            dynSide[i], dynSideV[i] = s, sv
+        end
 
         -- 背后是 +Z（角色前方是 -Z）；再往外挪一点，避免摆动时插进身体
         local cf = torso.CFrame * CFrame.new(0, torso.Size.Y * 0.34, torso.Size.Z * 0.78)
 
-        local total = #segments
-        local slotH = segments[1].Size.Y / 1.22
-        local wobble = math.rad(1.4 + math.min(horiz, 40) * 0.07)
-        -- 后仰角摊到每一段上（累加式），整条布自然弯成弧线，而不是一整块斜板
-        local perSeg = pitch / math.max(total, 1)
-
         for i, seg in ipairs(segments) do
-            if total > 1 then
-                local wob = (math.sin(clock * 5.2 + i * 0.75) * 0.5 + 0.5) * wobble
-                -- 角度只取负值（负 = 朝身后）：往后摆不会插进身体
-                local back = -(perSeg + math.rad(1.2) + wob)
-                local side = math.sin(clock * 3.3 + i * 0.55) * wobble * 0.35
-                cf = cf * CFrame.Angles(back, 0, side)
-            end
+            -- 角度只取负值（负 = 朝身后）：往后摆不会插进身体
+            local back = -(math.rad(1.2) + (dynBack[i] or 0))
+            local side = dynSide[i] or 0
+            cf = cf * CFrame.Angles(back, 0, side)
             seg.CFrame = cf * CFrame.new(0, -seg.Size.Y / 2, 0)
             cf = cf * CFrame.new(0, -slotH, 0)
+            -- 别让别的模块（上色 / 半透明）把这块布弄透明
+            if seg.Transparency ~= 0 then
+                seg.Transparency = 0
+            end
         end
     end
 
@@ -37293,10 +37356,12 @@ end)()
         Default = false,
         Tooltip = '在自己背后挂一块披风（只有你自己看得见）',
     })
-    Toggles.CapeSilky = WXGroupCape:AddToggle('CapeSilky', {
-        Text = '丝滑布料',
-        Default = true,
-        Tooltip = '开：多段布料，跑动向后飘、站着轻摆；关：一整块硬板',
+    Options.CapeMode = WXDrop(WXGroupCape, 'CapeMode', {
+        Values = { '丝滑', '超绝布料', '硬板' },
+        Default = 1,
+        Multi = false,
+        Text = '布料模式',
+        Tooltip = '丝滑 = 分段布料 + 惯性；超绝布料 = 前后左右都甩、超软超弹；硬板 = 一整块板，硬但也会跟着动',
     })
     Options.CapeSegments = WXGroupCape:AddSlider('CapeSegments', {
         Text = '布料段数', Default = 6, Min = 3, Max = 8, Rounding = 0, Compact = false,
@@ -37333,11 +37398,17 @@ end)()
         end
     end)
 
-    Toggles.CapeSilky:OnChanged(function()
-        if Toggles.CapeEnabled and Toggles.CapeEnabled.Value then
-            pcall(buildCape)
-        end
-    end)
+    if Options.CapeMode and Options.CapeMode.OnChanged then
+        Options.CapeMode:OnChanged(function()
+            table.clear(dynBack)
+            table.clear(dynBackV)
+            table.clear(dynSide)
+            table.clear(dynSideV)
+            if Toggles.CapeEnabled and Toggles.CapeEnabled.Value then
+                pcall(buildCape)
+            end
+        end)
+    end
 
     Toggles.CapeTint:OnChanged(function()
         if Toggles.CapeEnabled and Toggles.CapeEnabled.Value then
