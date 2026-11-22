@@ -22328,6 +22328,11 @@ Toggles.CoverOutlineOverlap = CoverGroup:AddToggle('CoverOutlineOverlap', {
     Default = false,
     Tooltip = '开：同一个模型里嵌套的部件全都画（线条会重叠，树/建筑更完整）；关：只画最外层',
 })
+Toggles.CoverOutlineMesh = CoverGroup:AddToggle('CoverOutlineMesh', {
+    Text = '网格模型按方块画',
+    Default = true,
+    Tooltip = '树 / 石头 / 建筑贴图模型这类拿不到真实形状，按包围盒画成方块；关掉就整类不画',
+})
 Toggles.CoverOutlineFarFade = CoverGroup:AddToggle('CoverOutlineFarFade', {
     Text = '远处变淡',
     Default = true,
@@ -35032,8 +35037,8 @@ end)()
         end
     end
 
-    local MAX_PARTS = 60          -- 一次最多描多少个部件
-    local MAX_SEGS = 900          -- 线条总预算，超了就不再往下画
+    local MAX_PARTS = 80          -- 一次最多描多少个部件
+    local MAX_SEGS = 1100         -- 线条总预算，超了就不再往下画
     local BITS = { 1, 2, 4 }
 
     local pool = {}
@@ -35237,20 +35242,29 @@ end)()
         end
 
         -- 第一步：筛掉不该画的
+        local meshOK = true
+        if Toggles.CoverOutlineMesh then
+            meshOK = Toggles.CoverOutlineMesh.Value
+        end
         local byModel = {}
         for _, part in ipairs(parts) do
             local keep = part:IsA('BasePart')
                 and part.Anchored
                 and part.Transparency < 0.95
-                and part:IsA('Part')                      -- 网格 / 并集形状还原不了：不画
-                and not part:FindFirstChildOfClass('SpecialMesh')  -- 用特殊网格伪装的（树等）也跳过
 
+            -- 网格模型（树、石头、装饰）拿不到真实形状，默认按包围盒画；
+            -- 关掉这个开关就整类跳过
+            if keep and not meshOK then
+                if not part:IsA('Part') or part:FindFirstChildOfClass('SpecialMesh') then
+                    keep = false
+                end
+            end
             if keep then
                 local sz = part.Size
                 local maxSpan = math.max(sz.X, sz.Y, sz.Z)
                 local minSpan = math.min(sz.X, sz.Y, sz.Z)
-                if sz.Magnitude < 8 then
-                    keep = false                          -- 太碎的装饰块
+                if maxSpan < 3 then
+                    keep = false                          -- 太小的碎块
                 elseif maxSpan > 300 then
                     keep = false                          -- 跨度超大的部件
                 elseif sz.Y <= 2.5 and sz.X > 30 and sz.Z > 30 then
@@ -35330,7 +35344,7 @@ end)()
                 segs = buildSegments(part),
                 center = part.Position,
                 corners = corners,
-                visible = prevVis[part] == true,
+                visible = prevVis[part] ~= false,
             }
         end
 
@@ -35552,6 +35566,10 @@ end)()
 
     if Toggles.CoverOutlineOverlap then
         Toggles.CoverOutlineOverlap:OnChanged(refreshSoon)
+    end
+
+    if Toggles.CoverOutlineMesh then
+        Toggles.CoverOutlineMesh:OnChanged(refreshSoon)
     end
 
     LP.CharacterAdded:Connect(function()
