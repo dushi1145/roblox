@@ -36923,7 +36923,7 @@ end)()
 
         local wMul = tonumber(Options.CapeWidth and Options.CapeWidth.Value) or 1
         local torsoWidth = math.clamp(torso.Size.X * 1.05 * wMul, 0.8, 5.0)
-        local capeLen = math.clamp(tonumber(Options.CapeLength and Options.CapeLength.Value) or 2.6, 1.0, 6.0)
+        local capeLen = math.clamp(tonumber(Options.CapeLength and Options.CapeLength.Value) or 3.6, 1.0, 8.0)
         -- 多段时总长 = (total-1)*slotH + 1.42*slotH，反推出 slotH，丝滑和硬板长度才一致
         local slotH, partH
         if total > 1 then
@@ -37068,8 +37068,8 @@ end)()
         Tooltip = '段数越多摆动越细，6 段是「丝滑」和性能的平衡点；硬板模式忽略',
     })
     Options.CapeLength = WXGroupCape:AddSlider('CapeLength', {
-        Text = '长度（格）', Default = 2.6, Min = 1.0, Max = 6.0, Rounding = 1, Compact = false,
-        Tooltip = '披风总长；丝滑和硬板两种模式长度一致',
+        Text = '长度（格）', Default = 3.6, Min = 1.0, Max = 8.0, Rounding = 1, Compact = false,
+        Tooltip = '披风总长（默认 3.6）；丝滑和硬板两种模式长度一致',
     })
     Options.CapeWidth = WXGroupCape:AddSlider('CapeWidth', {
         Text = '宽度倍率', Default = 1.0, Min = 0.6, Max = 2.2, Rounding = 2, Compact = false,
@@ -37109,8 +37109,8 @@ end)()
             end
         end,
     })
-    WXGroupCape:AddLabel('图片建议 512×512 或 512×1024（宽×高）')
-    WXGroupCape:AddLabel('放在 YZ_HUB/cape/cape.png，整张铺满披风')
+    WXGroupCape:AddLabel('图片建议 512×768（宽×高），竖图 1:1.5 左右最合适')
+    WXGroupCape:AddLabel('512×1024 也可以；放在 YZ_HUB/cape/cape.png 整张铺满')
 
     Toggles.CapeEnabled:OnChanged(function(v)
         if v then
@@ -37237,9 +37237,13 @@ end)()
         clone.CastShadow = false
         clone.Transparency = 0
         clone.Massless = true
-        for _, d in ipairs(clone:GetChildren()) do
-            if d:IsA('ParticleEmitter') or d:IsA('Light') or d:IsA('Trail')
-                or d:IsA('Sound') or d:IsA('Weld') or d:IsA('Motor6D') then
+        -- 关键：把克隆体上所有关节 / 约束全部拆掉。
+        -- 只要还留着一根焊到手上的 Weld/ManualWeld/Snap，旋转这个锚定克隆体时
+        -- 物理引擎就会顺着约束把人一起拖着转（就是「人转起来了」的原因）。
+        for _, d in ipairs(clone:GetDescendants()) do
+            if d:IsA('JointInstance') or d:IsA('WeldConstraint')
+                or d:IsA('Constraint') or d:IsA('ParticleEmitter')
+                or d:IsA('Light') or d:IsA('Trail') or d:IsA('Sound') then
                 pcall(function()
                     d:Destroy()
                 end)
