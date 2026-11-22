@@ -36232,6 +36232,384 @@ end)()
     end)
 end)()
 
+-- ====================== 人物披风（可自定义图片 + 丝滑布料摆动） ======================
+-- 身后挂一块披风：默认多段布料，跑动时向后飘、站着轻微摆动（类似 MC 光影/mod 的丝滑感）；
+-- 也可以关掉「丝滑布料」变成一整块硬板。
+-- 图片用贴图 ID（rbxassetid://xxx），会按段数切成竖条拼起来，所以整张图是连贯的。
+-- 注意：客户端创建，只有你自己看得见。
+; (function()
+    local Workspace = game:GetService('Workspace')
+    local IMG_FILE = 'YZCapeImage.txt'
+
+    local capeModel = nil
+    local segments = {}
+    local imageId = ''
+    local pitch = 0
+    local clock = 0
+
+    local function notify(msg)
+        pcall(function()
+            Library:Notify({ Title = '披风', Description = msg, Time = 4 })
+        end)
+    end
+
+    local function normalizeId(v)
+        v = tostring(v or ''):gsub('%s+', '')
+        if v == '' then
+            return ''
+        end
+        local digits = string.match(v, '(%d+)%s*$')
+        if digits then
+            return 'rbxassetid://' .. digits
+        end
+        return v
+    end
+
+    local function clearCape()
+        for _, seg in ipairs(segments) do
+            if seg and seg.Parent then
+                pcall(function() seg:Destroy() end)
+            end
+        end
+        table.clear(segments)
+        if capeModel and capeModel.Parent then
+            pcall(function() capeModel:Destroy() end)
+        end
+        capeModel = nil
+    end
+
+    -- 一段布：Part + 两面 SurfaceGui（同一条切片）
+    local function makeSegment(index, total, width, height, color)
+        local part = Instance.new('Part')
+        part.Name = 'YZCape' .. index
+        part.Size = Vector3.new(width, height, 0.06)
+        part.Anchored = true
+        part.CanCollide = false
+        part.CanQuery = false
+        part.CanTouch = false
+        part.CastShadow = false
+        part.Massless = true
+        part.TopSurface = Enum.SurfaceType.Smooth
+        part.BottomSurface = Enum.SurfaceType.Smooth
+        part.Color = color
+        part.Material = imageId ~= '' and Enum.Material.SmoothPlastic or Enum.Material.Fabric
+        part.Transparency = 0
+        part.Parent = capeModel
+
+        if imageId ~= '' then
+            for _, face in ipairs({ Enum.NormalId.Back, Enum.NormalId.Front }) do
+                local sg = Instance.new('SurfaceGui')
+                sg.Name = 'Face_' .. face.Name
+                sg.Face = face
+                sg.SizingMode = Enum.SurfaceGuiSizingMode.PixelsPerStud
+                sg.PixelsPerStud = 48
+                sg.LightInfluence = 0
+                sg.AlwaysOnTop = false
+                sg.Parent = part
+
+                local clip = Instance.new('Frame')
+                clip.Size = UDim2.fromScale(1, 1)
+                clip.BackgroundTransparency = 1
+                clip.ClipsDescendants = true
+                clip.Parent = sg
+
+                local img = Instance.new('ImageLabel')
+                img.Name = 'Slice'
+                img.BackgroundTransparency = 1
+                img.Image = imageId
+                img.ScaleType = Enum.ScaleType.Stretch
+                -- 把整张图铺满「整条披风」，再靠父级裁剪只露出这一段
+                img.Size = UDim2.fromScale(1, total)
+                img.Position = UDim2.fromScale(0, -(index - 1) / total)
+                img.Parent = clip
+            end
+        end
+
+        return part
+    end
+
+    local function buildCape()
+        clearCape()
+        if not (Toggles.CapeEnabled and Toggles.CapeEnabled.Value) then
+            return
+        end
+        local char = LP.Character
+        local torso = char and (char:FindFirstChild('UpperTorso') or char:FindFirstChild('Torso'))
+        if not torso then
+            return
+        end
+
+        local silky = Toggles.CapeSilky == nil or Toggles.CapeSilky.Value
+        local total = silky and math.floor(tonumber(Options.CapeSegments and Options.CapeSegments.Value) or 6) or 1
+        total = math.clamp(total, 1, 8)
+
+        local color = (Options.CapeColor and Options.CapeColor.Value) or Color3.fromRGB(190, 40, 52)
+
+        capeModel = Instance.new('Model')
+        capeModel.Name = 'YZCape'
+        capeModel.Parent = char
+
+        local torsoWidth = math.clamp(torso.Size.X * 0.95, 1.2, 3)
+        local len = 2.6
+        local segH = len / total
+
+        for i = 1, total do
+            segments[i] = makeSegment(i, total, torsoWidth, segH, color)
+        end
+
+        -- 先摆到身后，避免第一帧出现在世界原点
+        local baseCF = torso.CFrame * CFrame.new(0, torso.Size.Y * 0.32, torso.Size.Z * 0.52)
+        for i, seg in ipairs(segments) do
+            seg.CFrame = baseCF * CFrame.new(0, -segH * (i - 0.5), 0)
+        end
+    end
+
+    local function render(dt)
+        local enabled = Toggles.CapeEnabled and Toggles.CapeEnabled.Value
+        if not enabled then
+            return
+        end
+
+        local char = LP.Character
+        local torso = char and (char:FindFirstChild('UpperTorso') or char:FindFirstChild('Torso'))
+        local root = char and char:FindFirstChild('HumanoidRootPart')
+        if not torso or not root or #segments == 0 then
+            return
+        end
+
+        clock = clock + dt
+
+        local vel = root.AssemblyLinearVelocity
+        local horiz = Vector3.new(vel.X, 0, vel.Z).Magnitude
+        local falling = vel.Y < -12
+
+        -- 目标后仰角：跑得越快越向后飘，下落时也会被吹起来
+        local target = math.clamp(horiz / 42, 0, 1) * math.rad(62)
+        if falling then
+            target = math.max(target, math.rad(26))
+        end
+        pitch = pitch + (target - pitch) * math.clamp(dt * 7, 0, 1)
+
+        -- 背后是 +Z（角色前方是 -Z）
+        local cf = torso.CFrame * CFrame.new(0, torso.Size.Y * 0.32, torso.Size.Z * 0.52)
+        cf = cf * CFrame.Angles(-pitch, 0, 0)
+
+        local segH = segments[1].Size.Y
+        local wobble = math.rad(1.6 + math.min(horiz, 40) * 0.09)
+
+        for i, seg in ipairs(segments) do
+            if #segments > 1 then
+                local a = math.sin(clock * 5.2 + i * 0.75) * wobble
+                local b = math.sin(clock * 3.3 + i * 0.55) * wobble * 0.55
+                cf = cf * CFrame.Angles(a, 0, b)
+            end
+            seg.CFrame = cf * CFrame.new(0, -segH / 2, 0)
+            cf = cf * CFrame.new(0, -segH, 0)
+        end
+    end
+
+    ----------------------------------------------------------------------
+    -- 图片设置面板
+    ----------------------------------------------------------------------
+    local imgGui, imgBox
+
+    local function openImagePanel()
+        if imgGui and imgGui.Parent then
+            imgGui.Enabled = true
+            if imgBox then
+                imgBox.Text = (imageId ~= '') and imageId or ''
+            end
+            return
+        end
+
+        imgGui = Instance.new('ScreenGui')
+        imgGui.Name = 'YZCapeInput'
+        imgGui.ResetOnSpawn = false
+        imgGui.IgnoreGuiInset = true
+        imgGui.DisplayOrder = 60
+        local host
+        local ok, h = pcall(function()
+            return gethui and gethui()
+        end)
+        imgGui.Parent = (ok and h) or LP:FindFirstChild('PlayerGui') or game:GetService('CoreGui')
+
+        local frame = Instance.new('Frame')
+        frame.Size = UDim2.fromOffset(300, 120)
+        frame.Position = UDim2.new(0.5, -150, 0.4, 0)
+        frame.BackgroundColor3 = Color3.fromRGB(20, 20, 24)
+        frame.BorderSizePixel = 0
+        frame.Parent = imgGui
+        local c = Instance.new('UICorner')
+        c.CornerRadius = UDim.new(0, 12)
+        c.Parent = frame
+        local s = Instance.new('UIStroke')
+        s.Color = Color3.fromRGB(70, 70, 82)
+        s.Thickness = 1
+        s.Parent = frame
+
+        local label = Instance.new('TextLabel')
+        label.Size = UDim2.new(1, -24, 0, 20)
+        label.Position = UDim2.fromOffset(12, 10)
+        label.BackgroundTransparency = 1
+        label.Font = Enum.Font.GothamMedium
+        label.TextSize = 13
+        label.TextXAlignment = Enum.TextXAlignment.Left
+        label.TextColor3 = Color3.fromRGB(210, 220, 235)
+        label.Text = '披风图片（贴图 ID 或 rbxassetid://…）'
+        label.Parent = frame
+
+        imgBox = Instance.new('TextBox')
+        imgBox.Size = UDim2.new(1, -24, 0, 30)
+        imgBox.Position = UDim2.fromOffset(12, 36)
+        imgBox.BackgroundColor3 = Color3.fromRGB(32, 32, 38)
+        imgBox.BorderSizePixel = 0
+        imgBox.Font = Enum.Font.Gotham
+        imgBox.TextSize = 13
+        imgBox.TextColor3 = Color3.fromRGB(230, 235, 245)
+        imgBox.PlaceholderText = '例如 1234567890'
+        imgBox.PlaceholderColor3 = Color3.fromRGB(120, 120, 132)
+        imgBox.ClearTextOnFocus = false
+        imgBox.Text = (imageId ~= '') and imageId or ''
+        imgBox.Parent = frame
+        local c2 = Instance.new('UICorner')
+        c2.CornerRadius = UDim.new(0, 8)
+        c2.Parent = imgBox
+        local p2 = Instance.new('UIPadding')
+        p2.PaddingLeft = UDim.new(0, 8)
+        p2.Parent = imgBox
+
+        local apply = Instance.new('TextButton')
+        apply.Size = UDim2.fromOffset(84, 30)
+        apply.Position = UDim2.new(1, -200, 1, -42)
+        apply.BackgroundColor3 = Color3.fromRGB(48, 110, 170)
+        apply.BorderSizePixel = 0
+        apply.Font = Enum.Font.GothamMedium
+        apply.TextSize = 13
+        apply.TextColor3 = Color3.fromRGB(240, 245, 255)
+        apply.Text = '应用'
+        apply.Parent = frame
+        local c3 = Instance.new('UICorner')
+        c3.CornerRadius = UDim.new(0, 8)
+        c3.Parent = apply
+
+        local clearBtn = Instance.new('TextButton')
+        clearBtn.Size = UDim2.fromOffset(84, 30)
+        clearBtn.Position = UDim2.fromOffset(12, 70)
+        clearBtn.BackgroundColor3 = Color3.fromRGB(46, 46, 54)
+        clearBtn.BorderSizePixel = 0
+        clearBtn.Font = Enum.Font.GothamMedium
+        clearBtn.TextSize = 13
+        clearBtn.TextColor3 = Color3.fromRGB(225, 230, 240)
+        clearBtn.Text = '清除图片'
+        clearBtn.Parent = frame
+        local c4 = Instance.new('UICorner')
+        c4.CornerRadius = UDim.new(0, 8)
+        c4.Parent = clearBtn
+
+        local function applyId()
+            imageId = normalizeId(imgBox.Text)
+            pcall(function()
+                writefile(IMG_FILE, imageId)
+            end)
+            pcall(buildCape)
+            notify(imageId == '' and '已清除披风图片（改用纯色布料）' or ('已应用图片：' .. imageId))
+        end
+
+        apply.MouseButton1Click:Connect(function()
+            pcall(applyId)
+        end)
+        imgBox.FocusLost:Connect(function(enter)
+            if enter then
+                pcall(applyId)
+            end
+        end)
+        clearBtn.MouseButton1Click:Connect(function()
+            imgBox.Text = ''
+            imageId = ''
+            pcall(function() writefile(IMG_FILE, '') end)
+            pcall(buildCape)
+        end)
+    end
+
+    -- 读上一次保存的图片
+    pcall(function()
+        if isfile and isfile(IMG_FILE) then
+            imageId = normalizeId(readfile(IMG_FILE))
+        end
+    end)
+
+    ----------------------------------------------------------------------
+    -- 界面
+    ----------------------------------------------------------------------
+    local CapeGroup = Tabs.Visuals:AddLeftGroupbox('人物披风')
+
+    Toggles.CapeEnabled = CapeGroup:AddToggle('CapeEnabled', {
+        Text = '启用披风',
+        Default = false,
+        Tooltip = '在自己背后挂一块披风（只有你自己看得见，别人看不到）',
+    })
+    Toggles.CapeSilky = CapeGroup:AddToggle('CapeSilky', {
+        Text = '丝滑布料',
+        Default = true,
+        Tooltip = '开：多段布料，跑动向后飘、站着轻摆；关：一整块硬板',
+    })
+    Options.CapeSegments = CapeGroup:AddSlider('CapeSegments', {
+        Text = '布料段数', Default = 6, Min = 3, Max = 8, Rounding = 0, Compact = false,
+        Tooltip = '段数越多摆动越细，6 段是「丝滑」和性能的平衡点',
+    })
+    do
+        local L = CapeGroup:AddLabel('布料颜色（无图片时）')
+        L:AddColorPicker('CapeColor', { Default = Color3.fromRGB(190, 40, 52), Title = '披风颜色' })
+    end
+    CapeGroup:AddButton({
+        Text = '设置披风图片…',
+        Func = function()
+            pcall(openImagePanel)
+        end,
+    })
+
+    Toggles.CapeEnabled:OnChanged(function(v)
+        if v then
+            pcall(buildCape)
+        else
+            pcall(clearCape)
+        end
+    end)
+
+    Toggles.CapeSilky:OnChanged(function()
+        if Toggles.CapeEnabled and Toggles.CapeEnabled.Value then
+            pcall(buildCape)
+        end
+    end)
+
+    Options.CapeSegments:OnChanged(function()
+        if Toggles.CapeEnabled and Toggles.CapeEnabled.Value then
+            pcall(buildCape)
+        end
+    end)
+
+    if Options.CapeColor and Options.CapeColor.OnChanged then
+        Options.CapeColor:OnChanged(function()
+            if Toggles.CapeEnabled and Toggles.CapeEnabled.Value and imageId == '' then
+                pcall(buildCape)
+            end
+        end)
+    end
+
+    LP.CharacterAdded:Connect(function()
+        pcall(clearCape)
+        task.delay(0.6, function()
+            if Toggles.CapeEnabled and Toggles.CapeEnabled.Value then
+                pcall(buildCape)
+            end
+        end)
+    end)
+
+    RunService.RenderStepped:Connect(function(dt)
+        pcall(render, math.clamp(dt, 0, 0.1))
+    end)
+end)()
+
 -- ====================== CUSTOM VIEWMODEL & SPIN ======================
 do
     local origC0Map = setmetatable({}, { __mode = 'k' })
