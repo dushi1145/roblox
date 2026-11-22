@@ -22320,13 +22320,23 @@ Options.CoverOutlineRange = CoverGroup:AddSlider('CoverOutlineRange', {
 })
 Toggles.CoverOutlineThroughWall = CoverGroup:AddToggle('CoverOutlineThroughWall', {
     Text = '绘制墙后（穿墙可见）',
-    Default = false,
-    Tooltip = '开：不管有没有被挡住都画；关：被墙挡住的掩体不画（按部件做遮挡判断，稍费性能）',
+    Default = true,
+    Tooltip = '开：不判断遮挡，墙后 / 身后方向的掩体全都画出来；关：只画视线内看得见的（更省性能）',
 })
 Toggles.CoverOutlineOverlap = CoverGroup:AddToggle('CoverOutlineOverlap', {
     Text = '重叠绘制',
     Default = false,
-    Tooltip = '开：同一个模型里嵌套的部件全都画（线条会重叠）；关：只画最外层，内部内衬自动丢掉',
+    Tooltip = '开：同一个模型里嵌套的部件全都画（线条会重叠，树/建筑更完整）；关：只画最外层',
+})
+Toggles.CoverOutlineFarFade = CoverGroup:AddToggle('CoverOutlineFarFade', {
+    Text = '远处变淡',
+    Default = true,
+    Tooltip = '越靠近圈的边缘越淡，到边界完全消失',
+})
+Toggles.CoverOutlineNearFade = CoverGroup:AddToggle('CoverOutlineNearFade', {
+    Text = '近处变淡',
+    Default = false,
+    Tooltip = '越贴近自己越淡，免得脚边的线糊成一团',
 })
 Options.CoverOutlineOpacity = CoverGroup:AddSlider('CoverOutlineOpacity', {
     Text = '描边浓度', Default = 100, Min = 10, Max = 100, Rounding = 0, Suffix = ' %', Compact = false,
@@ -35383,6 +35393,14 @@ end)()
 
         local range = math.max(tonumber(Options.CoverOutlineRange and Options.CoverOutlineRange.Value) or 60, 5)
         local opacity = math.clamp((tonumber(Options.CoverOutlineOpacity and Options.CoverOutlineOpacity.Value) or 100) / 100, 0.05, 1)
+        local farFade = true
+        if Toggles.CoverOutlineFarFade then
+            farFade = Toggles.CoverOutlineFarFade.Value
+        end
+        local nearFade = false
+        if Toggles.CoverOutlineNearFade then
+            nearFade = Toggles.CoverOutlineNearFade.Value
+        end
         local thickness = math.clamp(tonumber(Options.CoverOutlineThickness and Options.CoverOutlineThickness.Value) or 2, 1, 6)
         local color = (Options.CoverOutlineColor and Options.CoverOutlineColor.Value) or Color3.fromRGB(130, 205, 255)
 
@@ -35432,7 +35450,16 @@ end)()
                             local mx = (p1.X + p2.X) * 0.5 - cx
                             local mz = (p1.Z + p2.Z) * 0.5 - cz
                             local d = math.sqrt(mx * mx + mz * mz)
-                            local alpha = opacity * (1 - math.clamp(d / range, 0, 1)) ^ 1.15
+                            local tt = math.clamp(d / range, 0, 1)
+                            local f = 1
+                            if farFade and nearFade then
+                                f = (4 * tt * (1 - tt)) ^ 1.15      -- 两头都淡，中间最亮
+                            elseif farFade then
+                                f = (1 - tt) ^ 1.15                 -- 越远越淡
+                            elseif nearFade then
+                                f = tt ^ 1.15                       -- 越近越淡
+                            end
+                            local alpha = opacity * f
                             if alpha > 0.02 then
                                 idx = idx + 1
                                 if idx > MAX_SEGS then
