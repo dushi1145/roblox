@@ -21855,6 +21855,13 @@ ESP_Tab:AddLabel('透视类型')
 Toggles.ESPHighlight = ESP_Tab:AddToggle('ESPHighlight', { Text = '高亮', Default = false })
 Toggles.ESPBox = ESP_Tab:AddToggle('ESPBox', { Text = '方框', Default = false })
 Toggles.ESPName = ESP_Tab:AddToggle('ESPName', { Text = '名称', Default = false })
+Options.NameTagStyle = WXDrop(ESP_Tab, 'NameTagStyle', {
+    Values = { '经典胶囊', '三段式（血 · 名 · 距）' },
+    Default = 1,
+    Multi = false,
+    Text = '名牌样式',
+    Tooltip = '三段式：左边血量、中间名字、右边距离；用它时「血量数值」会自动并入名牌，不再单独显示',
+})
 Toggles.ESPSkeleton = ESP_Tab:AddToggle('ESPSkeleton', { Text = '骨骼', Default = false })
 Toggles.ESPHealthBar = ESP_Tab:AddToggle('ESPHealthBar', { Text = '血条', Default = false })
 Toggles.ESPHPCounter = ESP_Tab:AddToggle('ESPHPCounter', { Text = '血量数值', Default = false })
@@ -30520,7 +30527,7 @@ local function tagCorner(obj, r)
     return c
 end
 
-function WXBuildNameTag(player)
+function WXBuildNameTagClassic(player)
     local pill = Instance.new('Frame')
     pill.Name = 'Pill'
     pill.AnchorPoint = Vector2.new(0.5, 1)
@@ -30627,6 +30634,160 @@ function WXBuildNameTag(player)
     return pill
 end
 
+-- 当前是不是「三段式」名牌
+function WXNameTagBarStyle()
+    local opt = Options and Options.NameTagStyle
+    return opt ~= nil and opt.Value == '三段式（血 · 名 · 距）'
+end
+
+-- 三段式名牌：左边血量小牌 + 中间名字 + 右边距离小牌
+function WXBuildNameTagBar(player)
+    local bar = Instance.new('Frame')
+    bar.Name = 'Pill'
+    bar.AnchorPoint = Vector2.new(0.5, 1)
+    bar.Position = UDim2.fromOffset(-10000, -10000)
+    bar.Size = UDim2.fromOffset(0, 26)
+    bar.AutomaticSize = Enum.AutomaticSize.X
+    bar.BackgroundColor3 = Color3.fromRGB(22, 24, 29)
+    bar.BackgroundTransparency = 0.08
+    bar.BorderSizePixel = 0
+    bar.Visible = false
+    bar.Parent = nameTagHolder
+    tagCorner(bar, 8)
+
+    local stroke = Instance.new('UIStroke')
+    stroke.Color = Color3.new(1, 1, 1)
+    stroke.Thickness = 1
+    stroke.Transparency = 0.78
+    stroke.Parent = bar
+
+    local padding = Instance.new('UIPadding')
+    padding.PaddingLeft = UDim.new(0, 4)
+    padding.PaddingRight = UDim.new(0, 4)
+    padding.PaddingTop = UDim.new(0, 3)
+    padding.PaddingBottom = UDim.new(0, 3)
+    padding.Parent = bar
+
+    local layout = Instance.new('UIListLayout')
+    layout.FillDirection = Enum.FillDirection.Horizontal
+    layout.VerticalAlignment = Enum.VerticalAlignment.Center
+    layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    layout.Padding = UDim.new(0, 6)
+    layout.SortOrder = Enum.SortOrder.LayoutOrder
+    layout.Parent = bar
+
+    local function makeChip(order, name)
+        local chip = Instance.new('Frame')
+        chip.Name = name
+        chip.Size = UDim2.fromOffset(0, 20)
+        chip.AutomaticSize = Enum.AutomaticSize.X
+        chip.BackgroundColor3 = Color3.fromRGB(10, 11, 14)
+        chip.BackgroundTransparency = 0.12
+        chip.BorderSizePixel = 0
+        chip.LayoutOrder = order
+        chip.Parent = bar
+        tagCorner(chip, 6)
+
+        local pad = Instance.new('UIPadding')
+        pad.PaddingLeft = UDim.new(0, 5)
+        pad.PaddingRight = UDim.new(0, 5)
+        pad.Parent = chip
+
+        local lay = Instance.new('UIListLayout')
+        lay.FillDirection = Enum.FillDirection.Horizontal
+        lay.VerticalAlignment = Enum.VerticalAlignment.Center
+        lay.Padding = UDim.new(0, 3)
+        lay.SortOrder = Enum.SortOrder.LayoutOrder
+        lay.Parent = chip
+        return chip
+    end
+
+    -- 左：♥ + 血量数字
+    local hpChip = makeChip(1, 'HPChip')
+    local heart = Instance.new('TextLabel')
+    heart.Name = 'Heart'
+    heart.Size = UDim2.fromOffset(0, 13)
+    heart.AutomaticSize = Enum.AutomaticSize.X
+    heart.BackgroundTransparency = 1
+    heart.Font = Enum.Font.GothamBold
+    heart.TextSize = 11
+    heart.TextColor3 = Color3.fromRGB(232, 72, 72)
+    heart.TextYAlignment = Enum.TextYAlignment.Center
+    heart.Text = '♥'
+    heart.LayoutOrder = 1
+    heart.Parent = hpChip
+
+    local hpLabel = Instance.new('TextLabel')
+    hpLabel.Name = 'HP'
+    hpLabel.Size = UDim2.fromOffset(0, 14)
+    hpLabel.AutomaticSize = Enum.AutomaticSize.X
+    hpLabel.BackgroundTransparency = 1
+    hpLabel.Font = Enum.Font.GothamBold
+    hpLabel.TextSize = 11
+    hpLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    hpLabel.TextYAlignment = Enum.TextYAlignment.Center
+    hpLabel.Text = '100'
+    hpLabel.LayoutOrder = 2
+    hpLabel.Parent = hpChip
+
+    -- 中：名字
+    local nameLabel = Instance.new('TextLabel')
+    nameLabel.Name = 'Name'
+    nameLabel.Size = UDim2.fromOffset(0, 18)
+    nameLabel.AutomaticSize = Enum.AutomaticSize.X
+    nameLabel.BackgroundTransparency = 1
+    nameLabel.Font = Enum.Font.GothamBold
+    nameLabel.TextSize = 13
+    nameLabel.TextColor3 = Color3.new(1, 1, 1)
+    nameLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
+    nameLabel.TextStrokeTransparency = 0.6
+    nameLabel.TextXAlignment = Enum.TextXAlignment.Center
+    nameLabel.TextYAlignment = Enum.TextYAlignment.Center
+    nameLabel.Text = tostring(player.DisplayName or player.Name)
+    nameLabel.LayoutOrder = 2
+    nameLabel.Parent = bar
+
+    -- 右：距离
+    local distChip = makeChip(3, 'DistChip')
+    local distLabel = Instance.new('TextLabel')
+    distLabel.Name = 'Dist'
+    distLabel.Size = UDim2.fromOffset(0, 14)
+    distLabel.AutomaticSize = Enum.AutomaticSize.X
+    distLabel.BackgroundTransparency = 1
+    distLabel.Font = Enum.Font.GothamBold
+    distLabel.TextSize = 11
+    distLabel.TextColor3 = Color3.fromRGB(236, 237, 242)
+    distLabel.TextYAlignment = Enum.TextYAlignment.Center
+    distLabel.Text = '--'
+    distLabel.LayoutOrder = 1
+    distLabel.Parent = distChip
+
+    local scale = Instance.new('UIScale')
+    scale.Scale = 1
+    scale.Parent = bar
+
+    return bar
+end
+
+-- 按当前样式挑一个构建器
+function WXBuildNameTag(player)
+    if WXNameTagBarStyle() then
+        return WXBuildNameTagBar(player)
+    end
+    return WXBuildNameTagClassic(player)
+end
+
+-- 切换样式时把旧名牌全清掉，下一帧会自动按新样式重建
+if Options.NameTagStyle and Options.NameTagStyle.OnChanged then
+    Options.NameTagStyle:OnChanged(function()
+        for _, child in ipairs(nameTagHolder:GetChildren()) do
+            if child:IsA('Frame') then
+                pcall(function() child:Destroy() end)
+            end
+        end
+    end)
+end
+
 function WXUpdateNameTag(pill, player, char, color)
     local cam = workspace.CurrentCamera
     local head = char and char:FindFirstChild('Head')
@@ -30670,8 +30831,9 @@ function WXUpdateNameTag(pill, player, char, color)
 
     local dot = pill:FindFirstChild('Dot')
     local nameLabel = pill:FindFirstChild('Name')
-    local badge = pill:FindFirstChild('Badge')
-    local distLabel = badge and badge:FindFirstChild('Dist')
+    local distLabel = pill:FindFirstChild('Dist', true)
+    local hpLabel = pill:FindFirstChild('HP', true)
+    local hum = char and char:FindFirstChildOfClass('Humanoid')
 
     -- 被判定为脚本的玩家：名牌底色直接变红，方便一眼区分
     local isCheater = detectedCheaters and detectedCheaters[player] ~= nil
@@ -30695,6 +30857,22 @@ function WXUpdateNameTag(pill, player, char, color)
 
     if distLabel then
         distLabel.Text = string.format('%dm', math.floor(dist))
+    end
+
+    -- 三段式名牌里的血量：数字 + 按比例变色
+    if hpLabel and hum then
+        local hp = math.floor(math.max(hum.Health, 0))
+        hpLabel.Text = tostring(hp)
+        local ratio = math.clamp(hum.Health / math.max(hum.MaxHealth, 1), 0, 1)
+        if isCheater then
+            hpLabel.TextColor3 = Color3.fromRGB(255, 236, 236)
+        elseif ratio > 0.6 then
+            hpLabel.TextColor3 = Color3.fromRGB(126, 236, 148)
+        elseif ratio > 0.3 then
+            hpLabel.TextColor3 = Color3.fromRGB(250, 206, 104)
+        else
+            hpLabel.TextColor3 = Color3.fromRGB(246, 106, 106)
+        end
     end
 end
 
@@ -30802,7 +30980,7 @@ local function createESP(player)
                         WXUpdateNameTag(nameTag, player, char, ec)
                     end
                 elseif nameTag then
-                    nameTag.Enabled = false
+                    nameTag.Visible = false
                 end
 
                 -- Skeleton ESP
@@ -30866,8 +31044,10 @@ local function createESP(player)
                     if espObjects[player] and espObjects[player].healthBarFill then espObjects[player].healthBarFill.Visible = false end
                 end
 
-                -- HP Counter
-                if Toggles.ESPHPCounter.Value then
+                -- HP Counter（三段式名牌里已经有血量数字，这里就不再单独画，免得重复）
+                local hpInsideTag = WXNameTagBarStyle and WXNameTagBarStyle()
+                    and Toggles.ESPName and Toggles.ESPName.Value
+                if Toggles.ESPHPCounter.Value and not hpInsideTag then
                     local tl2, br2 = getBoxBounds(char)
                     if tl2 and br2 then
                         if not hpCounter then
