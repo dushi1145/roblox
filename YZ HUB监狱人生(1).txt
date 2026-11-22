@@ -37708,16 +37708,54 @@ end)()
         return DEFAULT_COLOR
     end
 
-    -- 一个键：底板 + 居中的填充块（填充块从 0 长到 1 就是「从中间铺满」）
+    -- 一个键：外框（透明容器）+ 4 层柔和暗边 + 底板 + 居中的填充块
+    -- 暗边是照源码的 soft_edge 抄的：4 圈、每圈往外 1.1*scale、alpha = 90*t^2
+    local SHADOW_STEPS = 4
+    local SHADOW_A = 90 / 255
+
     local function mkKey(w, h, id)
         local f = Instance.new('Frame')
         f.Size = UDim2.fromOffset(w, h)
-        f.BackgroundColor3 = BG_COLOR
-        f.BackgroundTransparency = BG_TRANS
+        f.BackgroundTransparency = 1
         f.BorderSizePixel = 0
-        f.ClipsDescendants = true
-        addCorner(f, 9)
-        bgFrames[#bgFrames + 1] = f
+        f.ClipsDescendants = false
+
+        -- 由内往外 4 圈描边（k = 1 最贴边最深，k = 4 最外最淡），只画轮廓不压底色
+        for k = SHADOW_STEPS, 1, -1 do
+            local d = k * 1.1
+            local t = 1 - (k - 1) / SHADOW_STEPS
+            local al = SHADOW_A * t * t
+            if al > 0.004 then
+                local sh = Instance.new('Frame')
+                sh.AnchorPoint = Vector2.new(0.5, 0.5)
+                sh.Position = UDim2.fromScale(0.5, 0.5)
+                sh.Size = UDim2.new(1, d * 2, 1, d * 2)
+                sh.BackgroundTransparency = 1
+                sh.BorderSizePixel = 0
+                sh.ZIndex = 0
+                addCorner(sh, 11 + d)
+                local st = Instance.new('UIStroke')
+                st.Color = Color3.new(0, 0, 0)
+                st.Thickness = 1
+                st.Transparency = 1 - al
+                st.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+                st.Parent = sh
+                sh.Parent = f
+            end
+        end
+
+        -- 底板：圆角 11（源码 rounding = 11 * scale），填充块放在它里面被裁圆
+        local bg = Instance.new('Frame')
+        bg.Name = 'Bg'
+        bg.Size = UDim2.fromScale(1, 1)
+        bg.BackgroundColor3 = BG_COLOR
+        bg.BackgroundTransparency = BG_TRANS
+        bg.BorderSizePixel = 0
+        bg.ClipsDescendants = true
+        bg.ZIndex = 1
+        addCorner(bg, 11)
+        bg.Parent = f
+        bgFrames[#bgFrames + 1] = bg
 
         local fill = Instance.new('Frame')
         fill.Name = 'Fill'
@@ -37729,15 +37767,15 @@ end)()
         fill.BorderSizePixel = 0
         fill.Visible = false
         fill.ZIndex = 2
-        local fc = addCorner(fill, 8)
-        fill.Parent = f
+        local fc = addCorner(fill, 11)
+        fill.Parent = bg
 
         local item = { fill = fill, p = 0, target = 0, corner = fc }
         anim[#anim + 1] = item
         if id then
             rec[id] = item
         end
-        return f, fill
+        return f, fill, bg
     end
 
     local function mkLabel(parent, text, size)
@@ -37835,14 +37873,8 @@ end)()
         fRMB.Parent = root
 
         -- CPS 行：中间一根细竖线，左右各一个数字
-        fCPS = Instance.new('Frame')
-        fCPS.Size = UDim2.fromOffset(W, KS)
-        fCPS.BackgroundColor3 = BG_COLOR
-        fCPS.BackgroundTransparency = BG_TRANS
-        fCPS.BorderSizePixel = 0
-        addCorner(fCPS, 9)
+        fCPS = mkKey(W, KS, nil)
         fCPS.Parent = root
-        bgFrames[#bgFrames + 1] = fCPS
 
         local divider = Instance.new('Frame')
         divider.AnchorPoint = Vector2.new(0.5, 0.5)
@@ -38000,7 +38032,7 @@ end)()
                 item.fill.Visible = true
                 item.fill.Size = UDim2.fromScale(e, e)
                 item.fill.BackgroundTransparency = 1 - (FILL_A_MIN + (FILL_A_MAX - FILL_A_MIN) * e)
-                item.corner.CornerRadius = UDim.new(0, math.max(2, math.floor(9 * e + 0.5)))
+                item.corner.CornerRadius = UDim.new(0, math.max(2, math.floor(11 * e + 0.5)))
             end
         end
     end
