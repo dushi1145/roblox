@@ -21177,6 +21177,26 @@ Toggles.RageBotShootThroughCars = Rage_Tab:AddToggle('RageBotShootThroughCars', 
 Options.RageBotCarPenetration = WXDrop(Rage_Tab, 'RageBotCarPenetration', { Text = '载具穿透模式', Values = { 'Windows & Non-Solid', 'All Car Parts' }, Default = 1 })
 Toggles.RageBotDisableInVehicle = Rage_Tab:AddToggle('RageBotDisableInVehicle', { Text = '载具内禁用', Default = true })
 Rage_Tab:AddDivider()
+-- ===== 穿墙射击（Wallbang）=====
+Toggles.RageWallbang = Rage_Tab:AddToggle('RageWallbang', {
+    Text = '穿墙射击',
+    Default = false,
+    Tooltip = '无视墙体直接结算命中：逐层量出障碍厚度，只有薄墙/木门/玻璃这类才穿得过去，厚掩体打不穿'
+})
+;(function()
+    local dep = Rage_Tab:AddDependencyBox()
+    dep:SetupDependencies({ { Toggles.RageWallbang, true } })
+    Options.RageWallbangThickness = dep:AddSlider('RageWallbangThickness', {
+        Text = '最大穿墙厚度', Default = 8, Min = 1, Max = 40, Rounding = 0, Compact = false
+    })
+    Options.RageWallbangLayers = dep:AddSlider('RageWallbangLayers', {
+        Text = '最多穿透层数', Default = 2, Min = 1, Max = 5, Rounding = 0, Compact = false
+    })
+    Options.RageWallbangRange = dep:AddSlider('RageWallbangRange', {
+        Text = '穿墙生效距离', Default = 300, Min = 50, Max = 1000, Rounding = 0, Compact = false
+    })
+end)()
+Rage_Tab:AddDivider()
 Toggles.AutoDetectCheaters = Rage_Tab:AddToggle('AutoDetectCheaters', { Text = '自动检测脚本', Default = false, Tooltip = '扫描玩家的加速、飞行、传送与虚空存活行为' })
 Toggles.RageBotPrioritizeCheaters = Rage_Tab:AddToggle('RageBotPrioritizeCheaters', { Text = '优先攻击脚本', Default = false, Tooltip = '自动优先锁定已检测到的脚本' })
 Toggles.CheaterNotify = Rage_Tab:AddToggle('CheaterNotify', { Text = '脚本提示', Default = false, Tooltip = '检测到脚本时在屏幕弹出提示' })
@@ -21597,8 +21617,29 @@ do
 end
 Toggles.HitNumberRainbow = HN_Tab:AddToggle('HitNumberRainbow', { Text = '彩虹', Default = false })
 
--- Combat 右侧 Tabbox（原来这里还有个「逮捕光环」页，按用户要求整页删掉了）
+-- Arrest Aura (right side)
 local ArrestBox = Tabs.Combat:AddRightTabbox()
+local AR_Tab = ArrestBox:AddTab('逮捕光环')
+Toggles.ArrestAura = AR_Tab:AddToggle('ArrestAura', { Text = '逮捕光环', Default = false })
+Toggles.ArrestAura:AddKeyPicker('ArrestAuraBind', { Default = 'None', SyncToggleState = false, Modes = { 'Toggle', 'Hold', 'Always' }, Text = '逮捕光环' })
+AR_Tab:AddDivider()
+Toggles.ArrestAuraRange = AR_Tab:AddToggle('ArrestAuraRange', { Text = '显示范围', Default = false })
+Options.ArrestAuraThickness = AR_Tab:AddSlider('ArrestAuraThickness', { Text = '范围粗细', Default = 1.5, Min = 0.5, Max = 8, Rounding = 1, Compact = false })
+do
+    local L = AR_Tab:AddLabel('范围颜色')
+    L:AddColorPicker('ArrestAuraColor1', { Default = Color3.fromRGB(255, 0, 0), Title = '范围颜色 1' })
+    L:AddColorPicker('ArrestAuraColor2', { Default = Color3.fromRGB(255, 100, 0), Title = '范围颜色 2' })
+    L:AddColorPicker('ArrestAuraColor3', { Default = Color3.fromRGB(255, 200, 0), Title = '范围颜色 3' })
+end
+AR_Tab:AddDivider()
+Toggles.ArrestAuraFill = AR_Tab:AddToggle('ArrestAuraFill', { Text = '范围填充', Default = false })
+Options.ArrestAuraFillDensity = AR_Tab:AddSlider('ArrestAuraFillDensity', { Text = '填充密度', Default = 0.85, Min = 0, Max = 1, Rounding = 2, Compact = false })
+do
+    local L = AR_Tab:AddLabel('填充颜色')
+    L:AddColorPicker('ArrestAuraFillColor1', { Default = Color3.fromRGB(255, 0, 0), Title = '填充颜色 1' })
+    L:AddColorPicker('ArrestAuraFillColor2', { Default = Color3.fromRGB(255, 100, 0), Title = '填充颜色 2' })
+    L:AddColorPicker('ArrestAuraFillColor3', { Default = Color3.fromRGB(255, 200, 0), Title = '填充颜色 3' })
+end
 
 -- Void Aura Tab (HvH Edition)
 local Void_Tab = ArrestBox:AddTab('虚空光环')
@@ -23591,7 +23632,7 @@ do
 end
 
 -- Arrest Aura
--- 逮捕光环 / 自动抓捕都已删除，这个远程不再需要（原来的 WaitForChild 在缺远程的服会卡住加载）
+local ArrestPlayer = ReplicatedStorage:WaitForChild('Remotes'):WaitForChild('ArrestPlayer')
 local ARREST_RANGE = 7.5
 
 local function isArrestable(player)
@@ -23708,9 +23749,60 @@ local function updateArrestRange()
     end
 end
 
--- 逮捕光环整页已删（按用户要求），原来这里挂的自动逮捕循环一并移除
+-- ===== 逮捕光环运行时 =====
+-- 1) 范围圈：只有「逮捕光环」和「显示范围」都开启时才绘制
+-- 2) 自动逮捕：圈内出现可逮捕目标就发包（ArrestPlayer:InvokeServer），
+--    每人 1.2s 冷却，避免同一个目标每帧重复发包
+_G.WXArrestCD = _G.WXArrestCD or setmetatable({}, { __mode = 'k' })
 
+if not _G.WXArrestRenderConn then
+    _G.WXArrestRenderConn = RunService.RenderStepped:Connect(function()
+        local auraOn = Toggles.ArrestAura and Toggles.ArrestAura.Value
+        local rangeOn = Toggles.ArrestAuraRange and Toggles.ArrestAuraRange.Value
+        if not (auraOn and rangeOn) then
+            for i = 1, AR_SEG do
+                if arLines[i].Visible then arLines[i].Visible = false end
+                if arTris[i].Visible then arTris[i].Visible = false end
+            end
+            return
+        end
+        updateArrestRange()
+    end)
+end
 
+if not _G.WXArrestLoopConn then
+    _G.WXArrestLoopConn = RunService.Heartbeat:Connect(function()
+        if not (Toggles.ArrestAura and Toggles.ArrestAura.Value) then return end
+        local now = os.clock()
+        if now - lastArrestTime < 0.3 then return end
+        lastArrestTime = now
+
+        local char = LP.Character
+        local root = char and char:FindFirstChild('HumanoidRootPart')
+        local hum = char and char:FindFirstChildOfClass('Humanoid')
+        if not root or not hum or hum.Health <= 0 then return end
+        -- 只有狱警能逮捕，其他阵营不发包（服务端必然拒绝，省得刷请求）
+        if LP.Team ~= Teams.Guards then return end
+
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= LP and p.Team ~= LP.Team and isArrestable(p) then
+                local pc = p.Character
+                local phrp = pc and pc:FindFirstChild('HumanoidRootPart')
+                local phum = pc and pc:FindFirstChildOfClass('Humanoid')
+                if phrp and phum and phum.Health > 0
+                    and (phrp.Position - root.Position).Magnitude <= ARREST_RANGE + 0.5
+                    and now - (_G.WXArrestCD[p] or 0) >= 1.2 then
+                    _G.WXArrestCD[p] = now
+                    task.spawn(function()
+                        pcall(function()
+                            ArrestPlayer:InvokeServer(p, 1)
+                        end)
+                    end)
+                end
+            end
+        end
+    end)
+end
 
 -- Vehicle & Penetration System
 local wallParams = RaycastParams.new()
@@ -23813,7 +23905,66 @@ local function getLagCompensatedOrigin()
     return predictedServerPos
 end
 
+-- ====================== Wallbang（穿墙射击） ======================
+-- 逐层穿透：从枪口朝目标打一条射线，命中障碍后从目标往回打一条量出这层障碍的厚度，
+-- 厚度与层数都在限制内才继续；直到射线直接落到目标身上（说明已经穿过去了）。
+-- 打到自己 / 目标 / 载具部件直接算通过（载具穿透交给 hasLineOfSight 原有逻辑）。
+function _G.WXWallbangPass(from, to, targetPlayer)
+    if not (Toggles.RageWallbang and Toggles.RageWallbang.Value) then return false end
+    if not (Toggles.RageBot and Toggles.RageBot.Value) then return false end
+
+    local dir = to - from
+    local dist = dir.Magnitude
+    if dist < 0.6 then return false end
+    local maxRange = (Options.RageWallbangRange and Options.RageWallbangRange.Value) or 300
+    if dist > maxRange then return false end
+    local maxThick = (Options.RageWallbangThickness and Options.RageWallbangThickness.Value) or 8
+    local maxLayers = math.floor((Options.RageWallbangLayers and Options.RageWallbangLayers.Value) or 2)
+    local unit = dir / dist
+
+    local ex = { LP.Character }
+    local myVeh = isInVehicle(LP)
+    if myVeh then table.insert(ex, myVeh) end
+    local tChar = targetPlayer and targetPlayer.Character
+    if tChar then table.insert(ex, tChar) end
+
+    local cursor = from
+    local total = 0
+    for _ = 1, maxLayers do
+        local remain = to - cursor
+        if remain.Magnitude < 0.6 then return true end
+        wallParams.FilterDescendantsInstances = ex
+        local hit = Workspace:Raycast(cursor, remain, wallParams)
+        if not hit then return true end
+
+        local inst = hit.Instance
+        local model = inst:FindFirstAncestorOfClass('Model')
+        if model and Players:GetPlayerFromCharacter(model) then return true end
+        -- 载具交给 hasLineOfSight 原有的「穿车射击 / 穿透模式」判定，不在这里放行
+        if isVehiclePart(inst) then return false end
+
+        -- 回打一发量厚度：命中墙面在 from 侧，回打命中在同一堵墙的 to 侧
+        wallParams.FilterDescendantsInstances = ex
+        local back = Workspace:Raycast(to, cursor - to, wallParams)
+        local thick = maxThick + 1
+        if back and (back.Position - cursor).Magnitude <= (to - cursor).Magnitude then
+            local t = (hit.Position - back.Position).Magnitude
+            if t > 0.01 then thick = t end
+        end
+        if thick > maxThick then return false end
+        total = total + thick
+        if total > maxThick then return false end
+        cursor = hit.Position + unit * (thick + 0.5)
+    end
+    return false
+end
+
 local function hasLineOfSight(from, to, targetPlayer)
+    -- Wallbang：开启后薄墙直接放行（厚掩体仍会被拦）
+    if _G.WXWallbangPass and _G.WXWallbangPass(from, to, targetPlayer) then
+        return true
+    end
+
     local targetChar = targetPlayer and targetPlayer.Character
     local targetInVeh, targetVeh = targetPlayer and isInVehicle(targetPlayer)
     local myInVeh, myVeh = isInVehicle(LP)
@@ -27726,7 +27877,9 @@ function _G.WXRagePacket.predictHitPos(part)
         displacement = displacement.Unit * 6
     end
     local predicted = pos + displacement
-    if displacement.Magnitude > 0.1 then
+    -- 穿墙射击开启时不做墙体回退：子弹本来就无视薄墙，回退反而把命中点拉到墙面上
+    local wbOn = Toggles.RageWallbang and Toggles.RageWallbang.Value
+    if displacement.Magnitude > 0.1 and not wbOn then
         -- 预测点不能穿过墙体：被挡就退回遮挡面前，保证服务端射线可达
         _G.WXRagePacket.wallParams.FilterDescendantsInstances = { char }
         local ok, hit = pcall(Workspace.Raycast, Workspace, pos, displacement, _G.WXRagePacket.wallParams)
