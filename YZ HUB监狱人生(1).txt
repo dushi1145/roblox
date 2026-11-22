@@ -24573,19 +24573,49 @@ for j = 1, GHOST_COUNT do
     table.insert(ghostsLower, imgL)
 end
 
--- 扫描模式：一束从下往上（再从上往下）扫过身体的横线
-local SCAN_LINES = 18
-local scanLines = {}
-for j = 1, SCAN_LINES do
-    local bar = Instance.new('Frame')
-    bar.Name = 'ScanLine_' .. j
-    bar.BackgroundColor3 = Color3.new(1, 1, 1)
-    bar.BorderSizePixel = 0
-    bar.AnchorPoint = Vector2.new(0, 0.5)
-    bar.Visible = false
-    bar.ZIndex = 49
-    bar.Parent = targetEspGui
-    scanLines[j] = bar
+-- 扫描模式：一圈光环在身体上下往复扫过，后面拖一条连成一片的拖影
+local SCAN_RINGS = 30
+local SCAN_DWELL = 0.3          -- 到顶 / 到底各停 0.3 秒
+local scanRings = {}
+
+-- 扫描位置：0 = 头顶，1 = 脚下；中途匀速（首尾轻微缓动），只在两端停 SCAN_DWELL
+local function scanPosAt(t, sweepT)
+    local cyc = 2 * (sweepT + SCAN_DWELL)
+    local u = t % cyc
+    local p
+    if u < sweepT then
+        p = u / sweepT
+    elseif u < sweepT + SCAN_DWELL then
+        p = 1
+    elseif u < 2 * sweepT + SCAN_DWELL then
+        p = 1 - (u - sweepT - SCAN_DWELL) / sweepT
+    else
+        p = 0
+    end
+    return p * p * (3 - 2 * p)
+end
+
+for j = 1, SCAN_RINGS do
+    local ring = Instance.new('Frame')
+    ring.Name = 'ScanRing_' .. j
+    ring.BackgroundTransparency = 1
+    ring.BorderSizePixel = 0
+    ring.AnchorPoint = Vector2.new(0.5, 0.5)
+    ring.Visible = false
+    ring.ZIndex = 49
+    ring.Parent = targetEspGui
+
+    local corner = Instance.new('UICorner')
+    corner.CornerRadius = UDim.new(1, 0)
+    corner.Parent = ring
+
+    local ringStroke = Instance.new('UIStroke')
+    ringStroke.Color = Color3.new(1, 1, 1)
+    ringStroke.Thickness = 2
+    ringStroke.Transparency = 0
+    ringStroke.Parent = ring
+
+    scanRings[j] = ring
 end
 
 local function hideAllTargetESP()
@@ -24595,8 +24625,8 @@ local function hideAllTargetESP()
         ghostsUpper[j].Visible = false
         ghostsLower[j].Visible = false
     end
-    for j = 1, SCAN_LINES do
-        scanLines[j].Visible = false
+    for j = 1, SCAN_RINGS do
+        scanRings[j].Visible = false
     end
 end
 
@@ -24694,45 +24724,61 @@ local function updateTargetESP(dt)
 
         local head = targetChar:FindFirstChild('Head')
         local hrp = targetChar:FindFirstChild('HumanoidRootPart') or rootPart
-        local sTop, onTop = Camera:WorldToViewportPoint(head and (head.Position + Vector3.new(0, 0.9, 0)) or targetCenterPos)
-        local sBot, onBot = Camera:WorldToViewportPoint(hrp.Position - Vector3.new(0, 2.6, 0))
-        if not (onTop and onBot) or not head then
-            for j = 1, SCAN_LINES do
-                scanLines[j].Visible = false
+        local hideRings = function()
+            for j = 1, SCAN_RINGS do
+                scanRings[j].Visible = false
             end
+        end
+        if not head or not hrp then
+            hideRings()
             return
         end
 
-        local boxH = math.max(sBot.Y - sTop.Y, 14)
-        local boxW = boxH * 0.52
-        local leftX = sTop.X - boxW / 2
-
-        -- 上下往复：0 → 1 → 0
-        local phase = (tick() * (speed * 0.35)) % 2
-        if phase > 1 then
-            phase = 2 - phase
+        local sTop, onTop = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.85, 0))
+        local sBot, onBot = Camera:WorldToViewportPoint(hrp.Position - Vector3.new(0, 2.55, 0))
+        if not (onTop and onBot) then
+            hideRings()
+            return
         end
-        local scanY = sTop.Y + boxH * phase
-        local band = math.max(boxH * 0.32, 6)
-        local bright = math.clamp(brightness / 255, 0, 1)
 
-        for j = 1, SCAN_LINES do
-            local bar = scanLines[j]
-            local ratio = (j - 0.5) / SCAN_LINES
-            local y = sTop.Y + boxH * ratio
-            local d = math.abs(y - scanY) / band
-            local a = (1 - math.clamp(d, 0, 1))
-            a = a * a * bright
-            if a <= 0.02 then
-                bar.Visible = false
+        local topY, botY = sTop.Y, sBot.Y
+        if botY <= topY + 4 then
+            botY = topY + 40
+        end
+        local centerX = (sTop.X + sBot.X) * 0.5
+        local span = botY - topY
+        local bright = math.clamp(brightness / 255, 0, 1)
+        local ringSize = math.max(baseSize * 0.95, span * 0.42)
+        local sweepT = 2.2 / math.max(speed, 0.2)      -- 单趟用时
+        local now = tick()
+        local trailStep = 0.012                        -- 拖影采样间隔，越小越连贯
+
+        -- 拖影在光环「后面」：取稍早时刻的位置，层层叠着连成一片，像一条阴影
+        for j = 1, SCAN_RINGS do
+            local ring = scanRings[j]
+            local p = scanPosAt(now - (j - 1) * trailStep, sweepT)
+            local y = topY + span * p
+
+            local fade = (1 - (j - 1) / SCAN_RINGS) ^ 1.35
+            local alpha = bright * fade * (j == 1 and 0.95 or 0.42)
+
+            if alpha <= 0.015 then
+                ring.Visible = false
             else
-                bar.Visible = true
-                bar.Position = UDim2.fromOffset(leftX, y)
-                bar.Size = UDim2.fromOffset(boxW, 2)
-                bar.BackgroundColor3 = isRainbow
-                    and Color3.fromHSV((tick() * 0.5 + ratio * 0.35) % 1, 0.75, 1)
+                local size = ringSize * (1 + (j - 1) * 0.004)
+                ring.Visible = true
+                ring.Position = UDim2.fromOffset(centerX, y)
+                ring.Size = UDim2.fromOffset(size, size)
+
+                local col = isRainbow
+                    and Color3.fromHSV((tick() * 0.5 + j * 0.02) % 1, 0.75, 1)
                     or baseCol
-                bar.BackgroundTransparency = 1 - a * 0.85
+                local stroke = ring:FindFirstChildOfClass('UIStroke')
+                if stroke then
+                    stroke.Color = col
+                    stroke.Transparency = 1 - alpha
+                    stroke.Thickness = (j == 1) and 2.5 or 1.2
+                end
             end
         end
 
@@ -36493,7 +36539,7 @@ end)()
         capeModel.Name = 'YZCape'
         capeModel.Parent = char
 
-        local torsoWidth = math.clamp(torso.Size.X * 0.95, 1.2, 3)
+        local torsoWidth = math.clamp(torso.Size.X * 1.05, 1.4, 3.2)
         local capeLen = 2.6
         local slotH = capeLen / total
         local partH = slotH * 1.22      -- 上下重叠 22%，摆动不裂缝
@@ -36536,16 +36582,19 @@ end)()
 
         -- 背后是 +Z（角色前方是 -Z）；再往外挪一点，避免摆动时插进身体
         local cf = torso.CFrame * CFrame.new(0, torso.Size.Y * 0.34, torso.Size.Z * 0.78)
-        cf = cf * CFrame.Angles(-pitch, 0, 0)
 
+        local total = #segments
         local slotH = segments[1].Size.Y / 1.22
-        local wobble = math.rad(1.6 + math.min(horiz, 40) * 0.09)
+        local wobble = math.rad(1.4 + math.min(horiz, 40) * 0.07)
+        -- 后仰角摊到每一段上（累加式），整条布自然弯成弧线，而不是一整块斜板
+        local perSeg = pitch / math.max(total, 1)
 
         for i, seg in ipairs(segments) do
-            if #segments > 1 then
-                -- 角度只取负值（负 = 朝身后）：往后摆不会插进身体，只会在背后起伏
-                local back = -(math.rad(3) + (math.sin(clock * 5.2 + i * 0.75) * 0.5 + 0.5) * wobble)
-                local side = math.sin(clock * 3.3 + i * 0.55) * wobble * 0.4
+            if total > 1 then
+                local wob = (math.sin(clock * 5.2 + i * 0.75) * 0.5 + 0.5) * wobble
+                -- 角度只取负值（负 = 朝身后）：往后摆不会插进身体
+                local back = -(perSeg + math.rad(1.2) + wob)
+                local side = math.sin(clock * 3.3 + i * 0.55) * wobble * 0.35
                 cf = cf * CFrame.Angles(back, 0, side)
             end
             seg.CFrame = cf * CFrame.new(0, -seg.Size.Y / 2, 0)
