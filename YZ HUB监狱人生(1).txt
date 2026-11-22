@@ -24573,49 +24573,49 @@ for j = 1, GHOST_COUNT do
     table.insert(ghostsLower, imgL)
 end
 
--- 扫描模式：一圈光环在身体上下往复扫过，后面拖一条连成一片的拖影
-local SCAN_RINGS = 30
-local SCAN_DWELL = 0.3          -- 到顶 / 到底各停 0.3 秒
-local scanRings = {}
+-- 扫描模式：3D 圆环贴着身体上下扫，拖影连成筒状把人整个包住
+local SCAN_SEGS = 20            -- 每圈多少段（越大越圆，10 段以上基本看不出棱角）
+local SCAN_TRAIL = 14           -- 拖影圈数（密排 + 加粗，叠成连续渐变）
+local SCAN_SWEEP = 3.6          -- 单趟基准用时（会除以速度滑块）
+local scanLines = {}
+local scanPrevUsed = 0
 
--- 扫描位置：0 = 头顶，1 = 脚下；中途匀速（首尾轻微缓动），只在两端停 SCAN_DWELL
-local function scanPosAt(t, sweepT)
-    local cyc = 2 * (sweepT + SCAN_DWELL)
-    local u = t % cyc
-    local p
-    if u < sweepT then
-        p = u / sweepT
-    elseif u < sweepT + SCAN_DWELL then
-        p = 1
-    elseif u < 2 * sweepT + SCAN_DWELL then
-        p = 1 - (u - sweepT - SCAN_DWELL) / sweepT
-    else
-        p = 0
+local function hideScanLines()
+    for i = 1, scanPrevUsed do
+        local ln = scanLines[i]
+        if ln then
+            ln.Visible = false
+        end
     end
-    return p * p * (3 - 2 * p)
+    scanPrevUsed = 0
 end
 
-for j = 1, SCAN_RINGS do
-    local ring = Instance.new('Frame')
-    ring.Name = 'ScanRing_' .. j
-    ring.BackgroundTransparency = 1
-    ring.BorderSizePixel = 0
-    ring.AnchorPoint = Vector2.new(0.5, 0.5)
-    ring.Visible = false
-    ring.ZIndex = 49
-    ring.Parent = targetEspGui
+local function getScanLine(i)
+    local ln = scanLines[i]
+    if not ln then
+        local ok, obj = pcall(function()
+            return Drawing.new('Line')
+        end)
+        if not ok or not obj then
+            return nil
+        end
+        obj.Thickness = 1
+        obj.Transparency = 1
+        obj.ZIndex = 40
+        obj.Visible = false
+        scanLines[i] = obj
+        ln = obj
+    end
+    return ln
+end
 
-    local corner = Instance.new('UICorner')
-    corner.CornerRadius = UDim.new(1, 0)
-    corner.Parent = ring
-
-    local ringStroke = Instance.new('UIStroke')
-    ringStroke.Color = Color3.new(1, 1, 1)
-    ringStroke.Thickness = 2
-    ringStroke.Transparency = 0
-    ringStroke.Parent = ring
-
-    scanRings[j] = ring
+-- 扫描位置：0 = 脚下，1 = 头顶；三角波往复，两端用平滑曲线软停（不是硬卡住）
+local function scanPosAt(t, sweepT)
+    local cyc = sweepT * 2
+    local u = (t % cyc) / cyc
+    local tri = (u < 0.5) and (u * 2) or (2 - u * 2)
+    local v = math.clamp((tri - 0.5) * 1.9 + 0.5, 0, 1)
+    return v * v * (3 - 2 * v)
 end
 
 local function hideAllTargetESP()
@@ -24625,9 +24625,7 @@ local function hideAllTargetESP()
         ghostsUpper[j].Visible = false
         ghostsLower[j].Visible = false
     end
-    for j = 1, SCAN_RINGS do
-        scanRings[j].Visible = false
-    end
+    hideScanLines()
 end
 
 local function updateTargetESP(dt)
@@ -24724,63 +24722,85 @@ local function updateTargetESP(dt)
 
         local head = targetChar:FindFirstChild('Head')
         local hrp = targetChar:FindFirstChild('HumanoidRootPart') or rootPart
-        local hideRings = function()
-            for j = 1, SCAN_RINGS do
-                scanRings[j].Visible = false
-            end
-        end
         if not head or not hrp then
-            hideRings()
+            hideScanLines()
             return
         end
 
-        local sTop, onTop = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.85, 0))
-        local sBot, onBot = Camera:WorldToViewportPoint(hrp.Position - Vector3.new(0, 2.55, 0))
-        if not (onTop and onBot) then
-            hideRings()
-            return
+        local yBottom = hrp.Position.Y - 2.7
+        local yTop = head.Position.Y + 0.85
+        if yTop - yBottom < 1 then
+            yTop = yBottom + 5
         end
-
-        local topY, botY = sTop.Y, sBot.Y
-        if botY <= topY + 4 then
-            botY = topY + 40
-        end
-        local centerX = (sTop.X + sBot.X) * 0.5
-        local span = botY - topY
+        local radius = math.max(hrp.Size.X, hrp.Size.Z) * 0.5 + 0.45
         local bright = math.clamp(brightness / 255, 0, 1)
-        local ringSize = math.max(baseSize * 0.95, span * 0.42)
-        local sweepT = 2.2 / math.max(speed, 0.2)      -- 单趟用时
+        local sweepT = SCAN_SWEEP / math.max(speed, 0.2)
         local now = tick()
-        local trailStep = 0.012                        -- 拖影采样间隔，越小越连贯
+        local used = 0
+        local alive = true
 
-        -- 拖影在光环「后面」：取稍早时刻的位置，层层叠着连成一片，像一条阴影
-        for j = 1, SCAN_RINGS do
-            local ring = scanRings[j]
-            local p = scanPosAt(now - (j - 1) * trailStep, sweepT)
-            local y = topY + span * p
+        local function pushLine(fromV, toV, col, alpha, thick)
+            if not alive or alpha <= 0.02 then
+                return
+            end
+            local s1, on1 = Camera:WorldToViewportPoint(fromV)
+            local s2, on2 = Camera:WorldToViewportPoint(toV)
+            if not (on1 and on2 and s1.Z > 0 and s2.Z > 0) then
+                return
+            end
+            used = used + 1
+            local ln = getScanLine(used)
+            if not ln then
+                alive = false
+                return
+            end
+            ln.From = Vector2.new(s1.X, s1.Y)
+            ln.To = Vector2.new(s2.X, s2.Y)
+            ln.Color = col
+            ln.Transparency = 1 - alpha
+            ln.Thickness = thick
+            ln.Visible = true
+        end
 
-            local fade = (1 - (j - 1) / SCAN_RINGS) ^ 1.35
-            local alpha = bright * fade * (j == 1 and 0.95 or 0.42)
+        -- 拖影：一串密排的圆环，线画粗、透明度压很低，叠起来就是一条连续的渐变
+        for k = 1, SCAN_TRAIL do
+            local p = scanPosAt(now - (k - 1) * 0.02, sweepT)
+            local y = yBottom + (yTop - yBottom) * p
 
-            if alpha <= 0.015 then
-                ring.Visible = false
-            else
-                local size = ringSize * (1 + (j - 1) * 0.004)
-                ring.Visible = true
-                ring.Position = UDim2.fromOffset(centerX, y)
-                ring.Size = UDim2.fromOffset(size, size)
+            local isHead = (k == 1)
+            local fade = (1 - (k - 1) / SCAN_TRAIL) ^ 1.15
+            local alpha = isHead and (bright * 0.95) or (bright * fade * 0.26)
+            local thick = isHead and 2.6 or 3.2
+            local col = isRainbow
+                and Color3.fromHSV((tick() * 0.5 + k * 0.02) % 1, 0.75, 1)
+                or baseCol
 
-                local col = isRainbow
-                    and Color3.fromHSV((tick() * 0.5 + j * 0.02) % 1, 0.75, 1)
-                    or baseCol
-                local stroke = ring:FindFirstChildOfClass('UIStroke')
-                if stroke then
-                    stroke.Color = col
-                    stroke.Transparency = 1 - alpha
-                    stroke.Thickness = (j == 1) and 2.5 or 1.2
+            local firstPt, prevPt = nil, nil
+            for si = 0, SCAN_SEGS - 1 do
+                local ang = si / SCAN_SEGS * math.pi * 2
+                local pt = Vector3.new(
+                    hrp.Position.X + math.cos(ang) * radius,
+                    y,
+                    hrp.Position.Z + math.sin(ang) * radius)
+                if prevPt then
+                    pushLine(prevPt, pt, col, alpha, thick)
+                else
+                    firstPt = pt
                 end
+                prevPt = pt
+            end
+            if prevPt and firstPt then
+                pushLine(prevPt, firstPt, col, alpha, thick)
             end
         end
+
+        for i = used + 1, scanPrevUsed do
+            local ln = scanLines[i]
+            if ln then
+                ln.Visible = false
+            end
+        end
+        scanPrevUsed = used
 
     elseif mode == 'Призраки' then
         targetClientImg.Visible = false
@@ -36692,6 +36712,236 @@ end)()
 
     RunService.RenderStepped:Connect(function(dt)
         pcall(render, math.clamp(dt, 0, 0.1))
+    end)
+end)()
+
+-- ====================== 天气系统（下雨 / 下雪，客户端） ======================
+-- 两块贴图（雨丝、雪花）直接内嵌在脚本里：base64 → 写进 YZ_HUB/weather/ → getcustomasset
+-- 转成游戏内资产，不依赖网络也不吃审核。粒子挂在相机上方跟着走，所以走到哪下到哪。
+; (function()
+    local Workspace = game:GetService('Workspace')
+    local RunService = game:GetService('RunService')
+    local DIR = 'YZ_HUB/weather'
+
+    local RAIN_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAAYAAAAkCAYAAACqqEt1AAAAtUlEQVR42o3TvQmDUBiFYSfJEimcwQ2sUtlbW6SwtLOJjYWFIGpmyAqZIAtkgNQ3X+BAXggHIrwgPODPvd/NUkpZdIiO6nOfZYI8OqmcUERnVRDK6KJKQhVdVUWoo5uqCU10Vw2hjR6qJXTRU3WEPnqpnjCk7zUQRsBImAATYQbMhAWwEFbAStgAG2EH7H+BfZR9uf1c+4N2Sewi2mW3G2W31g6DHR87cHZE7VDbY2APzs9RewO7UuODtNxUogAAAABJRU5ErkJggg=='
+    local SNOW_B64 = 'iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAABX0lEQVR42sWVsWqDYBSFNZrBSBAdSiSDiwRCcAl0EoRubi5ZO2Ry6eQTOPoM2fsEeYa8Sd/DHuGztFIILf3t8C03555zvf75tfq+t0xyT2CLhXDFcoLLb/ZvAxyMPOGLtQhgTc1D4/wkwGY6D6NIPIhYbCGmFqHx6LHvBdhMtBKh2IhEpGIvDrCnlqAJ6VlOQ6YBLsKISQeTTDyKXBSQU8vQbOlZ4fFtgMOjhjTsxBHDUlTiBBW1As2OnhAPZxowrmbNI6c0PmH2LGrxAjW1Cs2Rng0eH6saAxYkR+w1Y7rB4Cwa0YoOWmpnNAU9CR4entbn3fucjJT9lkzZYHoRr3Ch1qAp6Unx8Md3MQaM64k5ITmT1Uw7GF7FDa7UWjQVPXs8xjV9CQh4UQce+cS+O6YejN/gRq1Dc6LngEfwLwFGV2T8JRs/psb/aMavilkuu1mua+MfnFk+mbN99P+Ed1JADYKQUMVCAAAAAElFTkSuQmCC'
+
+    local FALLBACK_TEX = 'rbxasset://textures/particles/sparkles_main.dds'
+
+    local b64chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+    local function b64decode(data)
+        data = string.gsub(data, '[^' .. b64chars .. '=]', '')
+        return (data:gsub('.', function(x)
+            if x == '=' then
+                return ''
+            end
+            local r, f = '', (string.find(b64chars, x, 1, true) - 1)
+            for i = 6, 1, -1 do
+                r = r .. (f % 2 ^ i - f % 2 ^ (i - 1) > 0 and '1' or '0')
+            end
+            return r
+        end):gsub('%d%d%d?%d?%d?%d?%d?%d?', function(x)
+            if #x ~= 8 then
+                return ''
+            end
+            local c = 0
+            for i = 1, 8 do
+                c = c + (string.sub(x, i, i) == '1' and 2 ^ (8 - i) or 0)
+            end
+            return string.char(c)
+        end))
+    end
+
+    local texRain, texSnow
+    local rig, rainE, snowE
+
+    -- 清掉上一次执行留下的天气实体，避免重复叠加
+    for _, obj in ipairs(Workspace:GetChildren()) do
+        if obj.Name == 'YZWeather' then
+            pcall(function() obj:Destroy() end)
+        end
+    end
+
+    local function buildTexture(name, b64)
+        local conv = getcustomasset or getsynasset or getasset
+        local path = DIR .. '/' .. name
+        pcall(function()
+            if type(writefile) == 'function' then
+                writefile(path, b64decode(b64))
+            end
+        end)
+        if type(conv) == 'function' then
+            local ok, asset = pcall(conv, path)
+            if ok and type(asset) == 'string' and #asset > 0 then
+                return asset
+            end
+        end
+        return FALLBACK_TEX
+    end
+
+    local function ensureTextures()
+        if texRain and texSnow then
+            return
+        end
+        pcall(function()
+            if type(makefolder) == 'function' then
+                if type(isfolder) ~= 'function' or not isfolder('YZ_HUB') then
+                    makefolder('YZ_HUB')
+                end
+                if type(isfolder) ~= 'function' or not isfolder(DIR) then
+                    makefolder(DIR)
+                end
+            end
+        end)
+        texRain = buildTexture('rain.png', RAIN_B64)
+        texSnow = buildTexture('snow.png', SNOW_B64)
+    end
+
+    local function ensureRig()
+        if not (texRain and texSnow) then
+            ensureTextures()
+        end
+        if rig and rig.Parent then
+            return
+        end
+
+        rig = Instance.new('Part')
+        rig.Name = 'YZWeather'
+        rig.Size = Vector3.new(240, 2, 240)
+        rig.Transparency = 1
+        rig.Anchored = true
+        rig.CanCollide = false
+        rig.CanQuery = false
+        rig.CanTouch = false
+        rig.CastShadow = false
+        rig.Massless = true
+        rig.Parent = Workspace
+
+        -- 雨：细长竖条，沿速度方向（VelocityParallel）拉成雨丝
+        rainE = Instance.new('ParticleEmitter')
+        rainE.Name = 'YZRain'
+        rainE.Texture = texRain
+        rainE.EmissionDirection = Enum.NormalId.Bottom
+        rainE.Orientation = Enum.ParticleOrientation.VelocityParallel
+        rainE.Lifetime = NumberRange.new(0.85)
+        rainE.Speed = NumberRange.new(105, 125)
+        rainE.SpreadAngle = Vector2.new(1.5, 1.5)
+        rainE.Acceleration = Vector3.new(0, -25, 0)
+        rainE.Drag = 0
+        rainE.LightInfluence = 0.15
+        rainE.LightEmission = 0.25
+        rainE.Rate = 0
+        rainE.Enabled = false
+        rainE.Size = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 2.4),
+            NumberSequenceKeypoint.new(1, 2.0),
+        })
+        rainE.Transparency = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 0.35),
+            NumberSequenceKeypoint.new(0.7, 0.45),
+            NumberSequenceKeypoint.new(1, 0.75),
+        })
+        rainE.Color = ColorSequence.new(Color3.fromRGB(188, 214, 255))
+        rainE.Parent = rig
+
+        -- 雪：柔和圆点，慢慢飘、左右晃
+        snowE = Instance.new('ParticleEmitter')
+        snowE.Name = 'YZSnow'
+        snowE.Texture = texSnow
+        snowE.EmissionDirection = Enum.NormalId.Bottom
+        snowE.Lifetime = NumberRange.new(6, 9)
+        snowE.Speed = NumberRange.new(4, 7)
+        snowE.SpreadAngle = Vector2.new(12, 12)
+        snowE.Acceleration = Vector3.new(1.6, -1.4, 0.8)
+        snowE.Drag = 0.5
+        snowE.LightInfluence = 0.1
+        snowE.LightEmission = 0.15
+        snowE.RotSpeed = NumberRange.new(-45, 45)
+        snowE.Rate = 0
+        snowE.Enabled = false
+        snowE.Size = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 0.55),
+            NumberSequenceKeypoint.new(1, 0.4),
+        })
+        snowE.Transparency = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 0.15),
+            NumberSequenceKeypoint.new(1, 0.55),
+        })
+        snowE.Color = ColorSequence.new(Color3.fromRGB(248, 250, 255))
+        snowE.Parent = rig
+    end
+
+    local function apply()
+        local kind = Options.WeatherKind and Options.WeatherKind.Value or '关闭'
+        local power = math.clamp((tonumber(Options.WeatherPower and Options.WeatherPower.Value) or 60) / 100, 0.05, 1)
+
+        if kind == '关闭' then
+            if rainE then
+                rainE.Enabled = false
+                rainE.Rate = 0
+            end
+            if snowE then
+                snowE.Enabled = false
+                snowE.Rate = 0
+            end
+            return
+        end
+
+        ensureRig()
+        if kind == '下雨' then
+            rainE.Rate = math.floor(700 * power)
+            rainE.Enabled = true
+            snowE.Enabled = false
+            snowE.Rate = 0
+        else
+            snowE.Rate = math.floor(180 * power)
+            snowE.Enabled = true
+            rainE.Enabled = false
+            rainE.Rate = 0
+        end
+    end
+
+    ----------------------------------------------------------------------
+    -- 界面
+    ----------------------------------------------------------------------
+    local WeatherGroup = Tabs.Visuals:AddRightGroupbox('天气')
+
+    Options.WeatherKind = WXDrop(WeatherGroup, 'WeatherKind', {
+        Values = { '关闭', '下雨', '下雪' },
+        Default = 1,
+        Multi = false,
+        Text = '天气',
+        Tooltip = '纯客户端效果，只有你自己看得到；粒子跟着相机走，走到哪下到哪',
+    })
+    Options.WeatherPower = WeatherGroup:AddSlider('WeatherPower', {
+        Text = '降水强度', Default = 60, Min = 10, Max = 100, Rounding = 0, Suffix = ' %', Compact = false,
+        Tooltip = '越大雨越密 / 雪越大',
+    })
+
+    if Options.WeatherKind and Options.WeatherKind.OnChanged then
+        Options.WeatherKind:OnChanged(function()
+            pcall(apply)
+        end)
+    end
+    if Options.WeatherPower and Options.WeatherPower.OnChanged then
+        Options.WeatherPower:OnChanged(function()
+            pcall(apply)
+        end)
+    end
+
+    RunService.RenderStepped:Connect(function()
+        if not rig or not rig.Parent then
+            return
+        end
+        local cam = Workspace.CurrentCamera
+        if not cam then
+            return
+        end
+        rig.CFrame = CFrame.new(cam.CFrame.Position + Vector3.new(0, 26, 0))
+    end)
+
+    task.defer(function()
+        pcall(apply)
     end)
 end)()
 
