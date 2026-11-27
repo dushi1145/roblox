@@ -25879,11 +25879,14 @@ local oldNamecall
 -- 直接拿它当 oldNamecall 会自我递归，最终所有 namecall 都返回一个函数，
 -- 表现为 FindFirstChild/GetChildren 取到函数 → bp.ChildAdded / #Tabs:GetChildren() 报错。
 -- 对策：安装前先从元表抓原始函数；钩子里加重入保护；整体包 pcall。
-local WXInNamecall = false
-local WXNamecallBody, WXNamecallHook
+-- 【注意】整段必须包在 IIFE 里：主 chunk 的 local 已贴着 200 上限，
+-- 在外面再声明 local 会让整个脚本编译失败（表现为 line 1: attempt to call a nil value）。
+;(function()
+    local busy = false
+    local body, hook
 
-WXNamecallBody = function(self, ...)
-    local method = getnamecallmethod()
+    body = function(self, ...)
+        local method = getnamecallmethod()
     if (method == 'Kick' or method == 'kick') and (self == LP or self == Players.LocalPlayer) then
         return nil
     end
@@ -26051,55 +26054,54 @@ WXNamecallBody = function(self, ...)
     return oldNamecall(self, ...)
 end
 
-WXNamecallHook = function(self, ...)
-    if WXInNamecall then
-        if typeof(oldNamecall) == 'function' and oldNamecall ~= WXNamecallHook then
+    hook = function(self, ...)
+        if busy then
+            if typeof(oldNamecall) == 'function' and oldNamecall ~= hook then
+                return oldNamecall(self, ...)
+            end
+            return nil
+        end
+        busy = true
+        local results = table.pack(pcall(body, self, ...))
+        busy = false
+        if results[1] then
+            return table.unpack(results, 2, results.n)
+        end
+        if typeof(oldNamecall) == 'function' and oldNamecall ~= hook then
             return oldNamecall(self, ...)
         end
         return nil
     end
-    WXInNamecall = true
-    local results = table.pack(pcall(WXNamecallBody, self, ...))
-    WXInNamecall = false
-    if results[1] then
-        return table.unpack(results, 2, results.n)
-    end
-    if typeof(oldNamecall) == 'function' and oldNamecall ~= WXNamecallHook then
-        return oldNamecall(self, ...)
-    end
-    return nil
-end
 
-do
     -- 安装前先抓一份原始 __namecall（执行器的 hookmetamethod 可能不返回它）
-    local RawNamecall = nil
+    local rawNamecall = nil
     pcall(function()
         local mt = getrawmetatable and getrawmetatable(game)
         local raw = mt and rawget(mt, '__namecall')
         if typeof(raw) == 'function' then
-            RawNamecall = raw
+            rawNamecall = raw
         end
     end)
 
-    local Returned = hookmetamethod(game, '__namecall', WXNamecallHook)
+    local returned = hookmetamethod(game, '__namecall', hook)
 
     -- 取值优先级：上次成功抓到并记住的原函数 > 安装前从元表拿到的 > hookmetamethod 的返回值
-    local Stored = rawget(_G, 'WXOrigNamecall')
-    if typeof(Stored) == 'function' and Stored ~= WXNamecallHook then
-        oldNamecall = Stored
-    elseif typeof(RawNamecall) == 'function' and RawNamecall ~= WXNamecallHook then
-        oldNamecall = RawNamecall
-    elseif typeof(Returned) == 'function' and Returned ~= WXNamecallHook then
-        oldNamecall = Returned
+    local stored = rawget(_G, 'WXOrigNamecall')
+    if typeof(stored) == 'function' and stored ~= hook then
+        oldNamecall = stored
+    elseif typeof(rawNamecall) == 'function' and rawNamecall ~= hook then
+        oldNamecall = rawNamecall
+    elseif typeof(returned) == 'function' and returned ~= hook then
+        oldNamecall = returned
     else
-        oldNamecall = rawget(_G, 'WXOrigNamecall') or RawNamecall or Returned
+        oldNamecall = rawget(_G, 'WXOrigNamecall') or rawNamecall or returned
     end
     rawset(_G, 'WXOrigNamecall', oldNamecall)
 
     if typeof(oldNamecall) ~= 'function' then
         warn('[WX] namecall 钩子未拿到原始函数，已跳过（部分功能可能失效）')
     end
-end
+end)()
 
 pcall(function()
     hookfunction(LP.Kick, function() end)
