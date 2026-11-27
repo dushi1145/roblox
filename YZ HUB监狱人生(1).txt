@@ -2,7 +2,7 @@ local WX_OK, WX_ERR = pcall(function()
 
 -- 重复执行时先清掉旧界面，避免叠层
 do
-	print('[WX] YZ HUB 开始注入 (build 11-27d)')
+	print('[WX] YZ HUB 开始注入 (build 11-27f)')
 	local hosts = {}
 	local ok, h = pcall(function() return gethui and gethui() end)
 	if ok and h then hosts[#hosts + 1] = h end
@@ -33595,13 +33595,15 @@ Library.ToggleKeybind = Options.MenuKeybind
 
 -- 标签图标颜色（自绘矢量图标专用；关闭时跟随主题强调色）
 ;(function()
+    -- 整段包 pcall：万一这里再出 API 问题，也绝不能连累后面的「配置」等分组
+    local ok, err = pcall(function()
     local IconGroup = Tabs['UI Settings']:AddRightGroupbox('标签图标')
     Toggles.TabIconCustom = IconGroup:AddToggle('TabIconCustom', {
         Text = '自定义图标颜色',
         Default = false,
         Tooltip = '关闭时跟随主题强调色；开启后用下面的颜色替换侧栏标签图标',
     })
-    Options.TabIconColor = IconGroup:AddColorPicker('TabIconColor', {
+    Options.TabIconColor = IconGroup:AddLabel('图标颜色'):AddColorPicker('TabIconColor', {
         Default = Color3.fromRGB(139, 123, 245),
         Title = '图标颜色',
     })
@@ -33615,6 +33617,10 @@ Library.ToggleKeybind = Options.MenuKeybind
     Toggles.TabIconCustom:OnChanged(ApplyIconColor)
     Options.TabIconColor:OnChanged(ApplyIconColor)
     ApplyIconColor()   -- 读档后先同步一次，避免开关是开的但图标还是主题色
+    end)
+    if not ok then
+        warn('[WX] 标签图标颜色 UI 创建失败，已跳过：' .. tostring(err))
+    end
 end)()
 
 pcall(function()
