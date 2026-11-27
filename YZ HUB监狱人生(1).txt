@@ -2,6 +2,7 @@ local WX_OK, WX_ERR = pcall(function()
 
 -- 重复执行时先清掉旧界面，避免叠层
 do
+	print('[WX] YZ HUB 开始注入 (build 11-27c)')
 	local hosts = {}
 	local ok, h = pcall(function() return gethui and gethui() end)
 	if ok and h then hosts[#hosts + 1] = h end
@@ -26073,7 +26074,7 @@ end
         return nil
     end
 
-    -- 安装前先抓一份原始 __namecall（执行器的 hookmetamethod 可能不返回它）
+    -- 安装前先抓一份原始 __namecall（执行器的 hookmetamethod 可能返回新钩子而不是原函数）
     local rawNamecall = nil
     pcall(function()
         local mt = getrawmetatable and getrawmetatable(game)
@@ -26083,23 +26084,20 @@ end
         end
     end)
 
-    local returned = hookmetamethod(game, '__namecall', hook)
-
-    -- 取值优先级：上次成功抓到并记住的原函数 > 安装前从元表拿到的 > hookmetamethod 的返回值
     local stored = rawget(_G, 'WXOrigNamecall')
-    if typeof(stored) == 'function' and stored ~= hook then
-        oldNamecall = stored
-    elseif typeof(rawNamecall) == 'function' and rawNamecall ~= hook then
-        oldNamecall = rawNamecall
-    elseif typeof(returned) == 'function' and returned ~= hook then
-        oldNamecall = returned
-    else
-        oldNamecall = rawget(_G, 'WXOrigNamecall') or rawNamecall or returned
+    local base = stored
+    if typeof(base) ~= 'function' or base == hook then
+        base = rawNamecall
     end
-    rawset(_G, 'WXOrigNamecall', oldNamecall)
 
-    if typeof(oldNamecall) ~= 'function' then
-        warn('[WX] namecall 钩子未拿到原始函数，已跳过（部分功能可能失效）')
+    if typeof(base) == 'function' and base ~= hook then
+        -- 先绑好原函数再装钩子，钩子内部不可能调到空
+        oldNamecall = base
+        rawset(_G, 'WXOrigNamecall', base)
+        hookmetamethod(game, '__namecall', hook)
+    else
+        -- 拿不到原函数就干脆不装：装了会让所有 namecall 返回 nil，界面和世界全崩
+        warn('[WX] 未取到原始 __namecall，已跳过 namecall 钩子（自瞄/双击等会失效）')
     end
 end)()
 
