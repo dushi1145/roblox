@@ -2,7 +2,7 @@ local WX_OK, WX_ERR = pcall(function()
 
 -- 重复执行时先清掉旧界面，避免叠层
 do
-	print('[WX] YZ HUB 开始注入 (build 11-27c)')
+	print('[WX] YZ HUB 开始注入 (build 11-27d)')
 	local hosts = {}
 	local ok, h = pcall(function() return gethui and gethui() end)
 	if ok and h then hosts[#hosts + 1] = h end
@@ -26074,7 +26074,7 @@ end
         return nil
     end
 
-    -- 安装前先抓一份原始 __namecall（执行器的 hookmetamethod 可能返回新钩子而不是原函数）
+    -- 安装前先抓一份原始 __namecall（用于坏了以后还原元表）
     local rawNamecall = nil
     pcall(function()
         local mt = getrawmetatable and getrawmetatable(game)
@@ -26084,20 +26084,38 @@ end
         end
     end)
 
-    local stored = rawget(_G, 'WXOrigNamecall')
-    local base = stored
-    if typeof(base) ~= 'function' or base == hook then
-        base = rawNamecall
-    end
+    local returned = hookmetamethod(game, '__namecall', hook)
 
-    if typeof(base) == 'function' and base ~= hook then
-        -- 先绑好原函数再装钩子，钩子内部不可能调到空
-        oldNamecall = base
-        rawset(_G, 'WXOrigNamecall', base)
-        hookmetamethod(game, '__namecall', hook)
+    -- 优先用 hookmetamethod 返回的原函数（执行器包装过的，直接调用才正常）；
+    -- 它要是返回了新钩子，就退回安装前抓到的 raw
+    if typeof(returned) == 'function' and returned ~= hook then
+        oldNamecall = returned
     else
-        -- 拿不到原函数就干脆不装：装了会让所有 namecall 返回 nil，界面和世界全崩
-        warn('[WX] 未取到原始 __namecall，已跳过 namecall 钩子（自瞄/双击等会失效）')
+        oldNamecall = rawNamecall
+    end
+    rawset(_G, 'WXOrigNamecall', oldNamecall)
+
+    -- 【自检】装完钩子立刻做一次普通 namecall：正常必须返回 table / Instance。
+    -- 有些执行器会返回新钩子或把 raw __namecall 直调出垃圾值，那样每次 FindFirstChild
+    -- 都会拿到表/函数，整个脚本会像中邪一样报错。发现不对就立刻把元表还原。
+    local probeOK = false
+    pcall(function()
+        local kids = Players:GetChildren()
+        local bp = LP:FindFirstChild('Backpack')
+        probeOK = (typeof(kids) == 'table') and (bp == nil or typeof(bp) == 'Instance')
+    end)
+
+    if not probeOK then
+        pcall(function()
+            local mt = getrawmetatable and getrawmetatable(game)
+            if mt and typeof(rawNamecall) == 'function' then
+                if setreadonly then setreadonly(mt, false) end
+                rawset(mt, '__namecall', rawNamecall)
+                if setreadonly then setreadonly(mt, true) end
+            end
+        end)
+        oldNamecall = rawNamecall
+        warn('[WX] namecall 钩子自检失败，已还原元表（静默自瞄/双击/命中钩子暂不可用，其余功能正常）')
     end
 end)()
 
@@ -26809,10 +26827,10 @@ do
     Toggles.FireRateApplyManual:OnChanged(updateAllGunsFireRate)
 
     local bp = LP:FindFirstChild('Backpack')
-    if bp then
+    if typeof(bp) == 'Instance' then
         bp.ChildAdded:Connect(patchToolFireRate)
     end
-    if LP.Character then
+    if typeof(LP.Character) == 'Instance' then
         LP.Character.ChildAdded:Connect(patchToolFireRate)
     end
     LP.CharacterAdded:Connect(function(char)
