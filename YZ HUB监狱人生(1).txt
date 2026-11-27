@@ -25874,7 +25874,15 @@ local isDoubleTapping = false
 -- 否则 rage 的每一发都会被钩子再复制一份（连上 fire() 内部的双击就是 3~4 倍重复包）
 local isRageFiring = false
 local oldNamecall
-oldNamecall = hookmetamethod(game, '__namecall', function(self, ...)
+-- 【namecall 钩子稳健化】
+-- 部分执行器（如新版 Potassium）的 hookmetamethod 返回的是「刚装上的钩子」而不是原函数，
+-- 直接拿它当 oldNamecall 会自我递归，最终所有 namecall 都返回一个函数，
+-- 表现为 FindFirstChild/GetChildren 取到函数 → bp.ChildAdded / #Tabs:GetChildren() 报错。
+-- 对策：安装前先从元表抓原始函数；钩子里加重入保护；整体包 pcall。
+local WXInNamecall = false
+local WXNamecallBody, WXNamecallHook
+
+WXNamecallBody = function(self, ...)
     local method = getnamecallmethod()
     if (method == 'Kick' or method == 'kick') and (self == LP or self == Players.LocalPlayer) then
         return nil
@@ -26041,7 +26049,57 @@ oldNamecall = hookmetamethod(game, '__namecall', function(self, ...)
 
     if setnamecallmethod then setnamecallmethod(method) end
     return oldNamecall(self, ...)
-end)
+end
+
+WXNamecallHook = function(self, ...)
+    if WXInNamecall then
+        if typeof(oldNamecall) == 'function' and oldNamecall ~= WXNamecallHook then
+            return oldNamecall(self, ...)
+        end
+        return nil
+    end
+    WXInNamecall = true
+    local results = table.pack(pcall(WXNamecallBody, self, ...))
+    WXInNamecall = false
+    if results[1] then
+        return table.unpack(results, 2, results.n)
+    end
+    if typeof(oldNamecall) == 'function' and oldNamecall ~= WXNamecallHook then
+        return oldNamecall(self, ...)
+    end
+    return nil
+end
+
+do
+    -- 安装前先抓一份原始 __namecall（执行器的 hookmetamethod 可能不返回它）
+    local RawNamecall = nil
+    pcall(function()
+        local mt = getrawmetatable and getrawmetatable(game)
+        local raw = mt and rawget(mt, '__namecall')
+        if typeof(raw) == 'function' then
+            RawNamecall = raw
+        end
+    end)
+
+    local Returned = hookmetamethod(game, '__namecall', WXNamecallHook)
+
+    -- 取值优先级：上次成功抓到并记住的原函数 > 安装前从元表拿到的 > hookmetamethod 的返回值
+    local Stored = rawget(_G, 'WXOrigNamecall')
+    if typeof(Stored) == 'function' and Stored ~= WXNamecallHook then
+        oldNamecall = Stored
+    elseif typeof(RawNamecall) == 'function' and RawNamecall ~= WXNamecallHook then
+        oldNamecall = RawNamecall
+    elseif typeof(Returned) == 'function' and Returned ~= WXNamecallHook then
+        oldNamecall = Returned
+    else
+        oldNamecall = rawget(_G, 'WXOrigNamecall') or RawNamecall or Returned
+    end
+    rawset(_G, 'WXOrigNamecall', oldNamecall)
+
+    if typeof(oldNamecall) ~= 'function' then
+        warn('[WX] namecall 钩子未拿到原始函数，已跳过（部分功能可能失效）')
+    end
+end
 
 pcall(function()
     hookfunction(LP.Kick, function() end)
