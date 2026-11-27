@@ -2050,10 +2050,19 @@ end
 -- 想强制使用自绘矢量图标（不走 UI 原有图标）：加载脚本前执行 _G.WX_USE_BUILTIN_TAB_ICONS = true
 local TabIconLine = 1.5
 
+-- 标签图标颜色：默认跟随主题强调色；把 _G.WXTabIconColor 设成 Color3 就用自定义颜色
+local function IconColor()
+    local Custom = rawget(_G, "WXTabIconColor")
+    if typeof(Custom) == "Color3" then
+        return Custom
+    end
+    return "AccentColor"
+end
+
 local function IconBar(Parent: GuiObject, X: number, Y: number, W: number, H: number, Rotation: number?)
     local Bar = New("Frame", {
         AnchorPoint = Vector2.new(0.5, 0.5),
-        BackgroundColor3 = "AccentColor",
+        BackgroundColor3 = IconColor(),
         BorderSizePixel = 0,
         Position = UDim2.fromScale(X, Y),
         Rotation = Rotation or 0,
@@ -2086,7 +2095,7 @@ local function IconRing(Parent: GuiObject, X: number, Y: number, Size: number, R
 
     New("UIStroke", {
         ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
-        Color = "AccentColor",
+        Color = IconColor(),
         Thickness = Thickness or TabIconLine,
         Parent = Ring,
     })
@@ -2097,7 +2106,7 @@ end
 local function IconDot(Parent: GuiObject, X: number, Y: number, Size: number)
     local Dot = New("Frame", {
         AnchorPoint = Vector2.new(0.5, 0.5),
-        BackgroundColor3 = "AccentColor",
+        BackgroundColor3 = IconColor(),
         BorderSizePixel = 0,
         Position = UDim2.fromScale(X, Y),
         Size = UDim2.fromScale(Size, Size),
@@ -2129,7 +2138,7 @@ local function IconPill(Parent: GuiObject, X: number, Y: number, W: number, H: n
 
     New("UIStroke", {
         ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
-        Color = "AccentColor",
+        Color = IconColor(),
         Thickness = Thickness or TabIconLine,
         Parent = Pill,
     })
@@ -2140,7 +2149,7 @@ end
 local function IconDiamond(Parent: GuiObject, X: number, Y: number, Size: number)
     local Diamond = New("Frame", {
         AnchorPoint = Vector2.new(0.5, 0.5),
-        BackgroundColor3 = "AccentColor",
+        BackgroundColor3 = IconColor(),
         BorderSizePixel = 0,
         Position = UDim2.fromScale(X, Y),
         Rotation = 45,
@@ -2159,7 +2168,7 @@ end
 local function IconSquare(Parent: GuiObject, X: number, Y: number, Size: number)
     local Square = New("Frame", {
         AnchorPoint = Vector2.new(0.5, 0.5),
-        BackgroundColor3 = "AccentColor",
+        BackgroundColor3 = IconColor(),
         BorderSizePixel = 0,
         Position = UDim2.fromScale(X, Y),
         Size = UDim2.fromScale(Size, Size),
@@ -2174,52 +2183,68 @@ local function IconSquare(Parent: GuiObject, X: number, Y: number, Size: number)
     return Square
 end
 
+-- 已生成的自绘图标框（弱引用）：改颜色时遍历它们重新上色
+local BuiltinIconFrames = setmetatable({}, { __mode = "v" })
+local BuiltinIconCount = 0
+
 local BuiltinTabIcons = {
-    -- 战斗：长剑（45° 斜置的剑身 + 护手 + 剑柄 + 柄头）
+    -- 战斗：准星（圆环 + 十字 + 中心点，仿 NL「暴力」）
     sword = function(Parent)
-        IconBar(Parent, 0.575, 0.425, 0.72, 0.078, -45)
-        IconBar(Parent, 0.335, 0.665, 0.38, 0.088, 45)
-        IconBar(Parent, 0.243, 0.757, 0.26, 0.095, -45)
-        IconDot(Parent, 0.155, 0.845, 0.105)
+        IconRing(Parent, 0.5, 0.5, 0.62, 0.5, 1.7)
+        IconBar(Parent, 0.5, 0.5, 0.30, 0.085)
+        IconBar(Parent, 0.5, 0.5, 0.30, 0.085, 90)
+        IconDot(Parent, 0.5, 0.5, 0.16)
     end,
 
-    -- 视觉：眼睛（横向眼形 + 瞳孔）
+    -- 视觉：图片框（外框 + 太阳 + 山，仿 NL「视觉」）
     eye = function(Parent)
-        IconPill(Parent, 0.5, 0.5, 0.92, 0.62)
-        IconDot(Parent, 0.5, 0.5, 0.25)
+        IconRing(Parent, 0.5, 0.5, 0.78, 0.22, 1.7)
+        IconDot(Parent, 0.33, 0.33, 0.14)
+        IconBar(Parent, 0.44, 0.64, 0.30, 0.085, -45)
+        IconBar(Parent, 0.63, 0.63, 0.24, 0.085, 45)
     end,
 
     -- 移动：四向箭头（十字 + 菱形箭头尖）
     move = function(Parent)
-        IconBar(Parent, 0.5, 0.5, 0.62, 0.082)
-        IconBar(Parent, 0.5, 0.5, 0.62, 0.082, 90)
-        IconDiamond(Parent, 0.5, 0.155, 0.13)
-        IconDiamond(Parent, 0.5, 0.845, 0.13)
-        IconDiamond(Parent, 0.155, 0.5, 0.13)
-        IconDiamond(Parent, 0.845, 0.5, 0.13)
+        IconBar(Parent, 0.5, 0.5, 0.58, 0.095)
+        IconBar(Parent, 0.5, 0.5, 0.58, 0.095, 90)
+        IconDiamond(Parent, 0.5, 0.17, 0.17)
+        IconDiamond(Parent, 0.5, 0.83, 0.17)
+        IconDiamond(Parent, 0.17, 0.5, 0.17)
+        IconDiamond(Parent, 0.83, 0.5, 0.17)
     end,
 
-    -- 杂项：四宫格（四个圆角实心方块）
+    -- 杂项：双行滑块 + 左右箭头（仿 NL「杂项」）
     package = function(Parent)
-        IconSquare(Parent, 0.33, 0.33, 0.22)
-        IconSquare(Parent, 0.67, 0.33, 0.22)
-        IconSquare(Parent, 0.33, 0.67, 0.22)
-        IconSquare(Parent, 0.67, 0.67, 0.22)
+        IconBar(Parent, 0.34, 0.33, 0.36, 0.085)
+        IconBar(Parent, 0.665, 0.255, 0.14, 0.085, 45)
+        IconBar(Parent, 0.665, 0.405, 0.14, 0.085, -45)
+        IconBar(Parent, 0.66, 0.67, 0.36, 0.085)
+        IconBar(Parent, 0.335, 0.595, 0.14, 0.085, -45)
+        IconBar(Parent, 0.335, 0.745, 0.14, 0.085, 45)
     end,
 
-    -- 界面设置：双行滑块
+    -- 界面设置：齿轮（外圈 + 中心孔 + 8 个齿）
     settings = function(Parent)
-        IconBar(Parent, 0.5, 0.35, 0.66, 0.078)
-        IconBar(Parent, 0.5, 0.65, 0.66, 0.078)
-        IconDot(Parent, 0.63, 0.35, 0.19)
-        IconDot(Parent, 0.37, 0.65, 0.19)
+        IconRing(Parent, 0.5, 0.5, 0.56, 0.5, 1.9)
+        IconRing(Parent, 0.5, 0.5, 0.26, 0.5, 1.6)
+        for i = 1, 8 do
+            local a = math.rad((i - 1) * 45)
+            IconBar(
+                Parent,
+                0.5 + math.cos(a) * 0.35,
+                0.5 + math.sin(a) * 0.35,
+                0.19,
+                0.11,
+                (i - 1) * 45
+            )
+        end
     end,
 
-    -- 信息：圆圈 + 感叹号
+    -- 信息：人物（头 + 肩）
     info = function(Parent)
-        IconRing(Parent, 0.5, 0.5, 0.82, 0.5, 1.6)
-        IconDot(Parent, 0.5, 0.31, 0.08)
-        IconBar(Parent, 0.5, 0.58, 0.085, 0.30)
+        IconDot(Parent, 0.5, 0.30, 0.30)
+        IconBar(Parent, 0.5, 0.78, 0.62, 0.32)
     end,
 
     -- 备用：准星（圆环 + 四向刻度）
@@ -2268,7 +2293,38 @@ function Library:CreateBuiltinTabIcon(Name: string, Parent: GuiObject): GuiObjec
         end
     end
 
+    BuiltinIconCount = BuiltinIconCount + 1
+    BuiltinIconFrames[BuiltinIconCount] = IconFrame
+
     return IconFrame
+end
+
+-- 给所有已生成的自绘图标重新上色；Color 传 nil 表示回到主题强调色
+function Library:SetBuiltinTabIconColor(Color)
+    rawset(_G, "WXTabIconColor", Color)
+
+    local Target = Color
+    if typeof(Target) ~= "Color3" then
+        Target = (self.Scheme and self.Scheme.AccentColor) or Color3.fromRGB(125, 85, 255)
+    end
+
+    for _, FrameObject in pairs(BuiltinIconFrames) do
+        if FrameObject and FrameObject.Parent then
+            for _, Descendant in ipairs(FrameObject:GetDescendants()) do
+                if Descendant:IsA("Frame") then
+                    if Descendant.BackgroundTransparency < 1 then
+                        pcall(function()
+                            Descendant.BackgroundColor3 = Target
+                        end)
+                    end
+                elseif Descendant:IsA("UIStroke") then
+                    pcall(function()
+                        Descendant.Color = Target
+                    end)
+                end
+            end
+        end
+    end
 end
 
 --// 兜底字形图标：连矢量图标都画不了时才用 \\--
@@ -26296,9 +26352,23 @@ local function spawnImpactEffect(pos, color)
     Debris:AddItem(part, 0.35)
 end
 
+-- 判断一条弹道是不是「自己打出去的」：p1 必须落在我当前手上那把枪的 Muzzle 上。
+-- 自己开枪（手动 / Ragebot）都从当前工具的 Muzzle 出弹；对手的弹道 p1 是对手的枪口。
+function _G.WXIsLocalMuzzle(origin)
+    local char = LP.Character
+    if not char then return false end
+    local tool = char:FindFirstChildOfClass('Tool')
+    local muzzle = tool and tool:FindFirstChild('Muzzle')
+    if not muzzle then return false end
+    return (origin - muzzle.Position).Magnitude < 3.2
+end
+
 local function makeTracer(p1, p2, color1, color2, thickness, lifetime)
-    -- 头顶武器开启时，弹道从头顶那把枪的枪口出来
-    if Toggles.HeadWeapon and Toggles.HeadWeapon.Value and _G.YZHeadWeaponMuzzle then
+    -- 头顶武器开启时，只有「自己打出去的」弹道才从头顶枪口出来。
+    -- 别人的弹道是 ReplicateEvent 复制过来的（p1 = 对手的枪口），
+    -- 无条件替换会让全场子弹都从自己身上射出。
+    if Toggles.HeadWeapon and Toggles.HeadWeapon.Value and _G.YZHeadWeaponMuzzle
+        and _G.WXIsLocalMuzzle and _G.WXIsLocalMuzzle(p1) then
         local mp = _G.YZHeadWeaponMuzzle()
         if mp then
             p1 = mp
@@ -33447,6 +33517,30 @@ Options.BgOpacity = MenuGroup:AddSlider('BgOpacity', {
 
 Library.ToggleKeybind = Options.MenuKeybind
 
+-- 标签图标颜色（自绘矢量图标专用；关闭时跟随主题强调色）
+;(function()
+    local IconGroup = Tabs['UI Settings']:AddRightGroupbox('标签图标')
+    Toggles.TabIconCustom = IconGroup:AddToggle('TabIconCustom', {
+        Text = '自定义图标颜色',
+        Default = false,
+        Tooltip = '关闭时跟随主题强调色；开启后用下面的颜色替换侧栏标签图标',
+    })
+    Options.TabIconColor = IconGroup:AddColorPicker('TabIconColor', {
+        Default = Color3.fromRGB(139, 123, 245),
+        Title = '图标颜色',
+    })
+
+    local function ApplyIconColor()
+        local on = Toggles.TabIconCustom and Toggles.TabIconCustom.Value
+        local c = Options.TabIconColor and Options.TabIconColor.Value
+        Library:SetBuiltinTabIconColor(on and c or nil)
+    end
+
+    Toggles.TabIconCustom:OnChanged(ApplyIconColor)
+    Options.TabIconColor:OnChanged(ApplyIconColor)
+    ApplyIconColor()   -- 读档后先同步一次，避免开关是开的但图标还是主题色
+end)()
+
 pcall(function()
     if Library.KeybindFrame then
         Library.KeybindFrame.Visible = false
@@ -37344,6 +37438,9 @@ end)()
     local angle = 0
     local smoothPos = nil
     local muzzleBack = 1.2
+    local muzzleBack0 = 1.2   -- 倍率 1 时的枪口前伸距离（缩放后按倍率换算）
+    local scaleParts = {}     -- 每个零件在倍率 1 下的尺寸 + 相对 Handle 的偏移
+    local appliedScale = -1   -- 上一次已应用的倍率；-1 = 强制下一帧重算
 
     local function currentTool()
         local char = LP.Character
@@ -37431,12 +37528,55 @@ end)()
                     if z < minZ then minZ = z end
                 end
             end
-            muzzleBack = math.max(0.8, math.abs(minZ) + 0.45)
+            muzzleBack0 = math.max(0.8, math.abs(minZ) + 0.45)
+            muzzleBack = muzzleBack0
         end
+
+        -- 记录每个零件在倍率 1 下的尺寸与相对 Handle 的偏移，供「武器大小」整体缩放
+        scaleParts = {}
+        if handle and handle:IsA('BasePart') then
+            scaleParts[#scaleParts + 1] = { part = handle, size = handle.Size, pos = Vector3.zero, rot = CFrame.new() }
+            for _, d in ipairs(c:GetDescendants()) do
+                if d:IsA('BasePart') and d ~= handle then
+                    local off = handle.CFrame:ToObjectSpace(d.CFrame)
+                    scaleParts[#scaleParts + 1] = {
+                        part = d,
+                        size = d.Size,
+                        pos = off.Position,
+                        rot = off - off.Position,   -- 只保留旋转部分
+                    }
+                end
+            end
+        end
+        appliedScale = -1
 
         c.Parent = Workspace
         clone = c
         lastTool = tool
+    end
+
+    -- 按倍率整体缩放：零件尺寸 × s，相对 Handle 的偏移 × s，枪口前伸也跟着缩放。
+    -- 只在倍率变化时算一次，之后每帧 PivotTo 沿用这些相对偏移，不会越缩越乱。
+    local function applyScale(s)
+        if not clone or not clone.Parent then
+            return
+        end
+        local handle = clone.PrimaryPart or clone:FindFirstChild('Handle')
+        if not handle then
+            return
+        end
+        for _, e in ipairs(scaleParts) do
+            local p = e.part
+            if p and p.Parent then
+                pcall(function()
+                    p.Size = e.size * s
+                    if p ~= handle then
+                        p.CFrame = handle.CFrame * CFrame.new(e.pos * s) * e.rot
+                    end
+                end)
+            end
+        end
+        muzzleBack = muzzleBack0 * s
     end
 
     -- 弹道起点：头顶这把枪的枪口
@@ -37464,6 +37604,10 @@ end)()
     Options.HeadWeaponSpin = WXGroupHeadWeapon:AddSlider('HeadWeaponSpin', {
         Text = '旋转速度（度/秒）', Default = 90, Min = 0, Max = 720, Rounding = 0, Compact = false,
         Tooltip = '0 = 不转，90 = 4 秒一圈，360 = 1 秒一圈',
+    })
+    Options.HeadWeaponScale = WXGroupHeadWeapon:AddSlider('HeadWeaponScale', {
+        Text = '武器大小（倍率）', Default = 1, Min = 0.3, Max = 4, Rounding = 2, Compact = false,
+        Tooltip = '1 = 原始大小；调大更显眼，调小不挡视野。枪口位置与弹道起点会跟着一起缩放',
     })
     Toggles.HeadWeaponLag = WXGroupHeadWeapon:AddToggle('HeadWeaponLag', {
         Text = '跟手惯性（延迟）',
@@ -37523,6 +37667,13 @@ end)()
         local root = char and char:FindFirstChild('HumanoidRootPart')
         if not head or not root then
             return
+        end
+
+        -- 武器大小：倍率变了才重算一次零件尺寸与相对偏移
+        local wantScale = tonumber(Options.HeadWeaponScale and Options.HeadWeaponScale.Value) or 1
+        if math.abs(wantScale - appliedScale) > 0.001 then
+            appliedScale = wantScale
+            pcall(applyScale, wantScale)
         end
 
         -- 手上隐藏（默认开）
