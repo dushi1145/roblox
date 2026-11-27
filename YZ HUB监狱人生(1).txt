@@ -2,7 +2,7 @@ local WX_OK, WX_ERR = pcall(function()
 
 -- 重复执行时先清掉旧界面，避免叠层
 do
-	print('[WX] YZ HUB 开始注入 (build 11-27f)')
+	print('[WX] YZ HUB 开始注入 (build 11-27k)')
 	local hosts = {}
 	local ok, h = pcall(function() return gethui and gethui() end)
 	if ok and h then hosts[#hosts + 1] = h end
@@ -20961,13 +20961,98 @@ do
         warn('[WX] Lucide 图标模块未加载，标签页图标回退为内置矢量图标')
     end
 end
+-- ====================== 标签图标：直接用 URL 链接 ======================
+-- 把图标直链填到下面 6 行（png / jpg / webp 都行，图床直链即可）。
+-- 留空或下载失败 → 用上次缓存 → 再没有就回退内置矢量图标，绝不影响加载。
+_G.WXTabIconAsset = _G.WXTabIconAsset or {}
+;(function()
+    -- ↓↓↓ 图标直链：想换哪个改哪行，留空 = 用内置图标
+    local URLS = {
+        info     = 'https://img.remit.ee/i/f1WaqbL2t9KF',  -- 人物
+        sword    = 'https://img.remit.ee/i/EdFa8UPpfFd4',  -- 圆环 + 十字（战斗）
+        eye      = 'https://img.remit.ee/i/F3KGrnXg1xtu',  -- 图片框（视觉）
+        move     = 'https://img.remit.ee/i/2fY37CvSCJUk',  -- 四向箭头（移动）
+        package  = 'https://img.remit.ee/i/dqL8As38udUW',  -- 双行滑块（杂项）
+        settings = 'https://img.remit.ee/i/YGMjm0MDShIN',  -- 齿轮（界面设置）
+    }
+
+    -- 统一入口：拿到网页图就给 asset，否则回退内置图标名
+    _G.WXIconFor = function(key)
+        local asset = _G.WXTabIconAsset and _G.WXTabIconAsset[key]
+        if type(asset) == 'string' and #asset > 0 then
+            local ok, icon = pcall(function() return Library:GetCustomIcon(asset) end)
+            if ok and icon then return asset end
+        end
+        return key
+    end
+
+    local converter = getcustomasset or getsynasset or getasset
+    if type(writefile) ~= 'function' or type(converter) ~= 'function' then return end
+
+    local DIR = 'YZ_HUB/icons'
+    pcall(function()
+        if type(isfolder) == 'function' and type(makefolder) == 'function' then
+            if not isfolder('YZ_HUB') then makefolder('YZ_HUB') end
+            if not isfolder(DIR) then makefolder(DIR) end
+        end
+    end)
+
+    local function toAsset(path)
+        local ok, a = pcall(converter, path)
+        if ok and type(a) == 'string' and #a > 0 then return a end
+        return nil
+    end
+
+    local function extOf(url)
+        local clean = url:match('^[^?]+') or url
+        local e = clean:match('%.([%a%d]+)$')
+        e = e and string.lower(e) or 'png'
+        if e ~= 'png' and e ~= 'jpg' and e ~= 'jpeg' and e ~= 'webp' then e = 'png' end
+        return e
+    end
+
+    local function isImage(body)
+        if type(body) ~= 'string' or #body < 400 then return false end
+        local b1, b2, b3, b4 = body:byte(1, 4)
+        if b1 == 0x89 and b2 == 0x50 and b3 == 0x4E and b4 == 0x47 then return true end
+        if b1 == 0xFF and b2 == 0xD8 then return true end
+        if b1 == 0x52 and b2 == 0x49 and b3 == 0x46 and b4 == 0x46 then return true end
+        return false
+    end
+
+    local startClock = os.clock()
+
+    for key, url in pairs(URLS) do
+        -- 总超时 8 秒：网络不通时不能把加载卡住
+        if os.clock() - startClock > 8 then break end
+
+        if type(url) == 'string' and #url > 10 then
+            local path = DIR .. '/' .. key .. '.' .. extOf(url)
+            local ok, body = pcall(function() return game:HttpGet(url) end)
+            if ok and isImage(body) and pcall(writefile, path, body) then
+                local a = toAsset(path)
+                if a then _G.WXTabIconAsset[key] = a end
+            end
+
+            -- 下载失败就用上次的缓存
+            if not _G.WXTabIconAsset[key] and type(isfile) == 'function' then
+                local okF, has = pcall(isfile, path)
+                if okF and has then
+                    local a = toAsset(path)
+                    if a then _G.WXTabIconAsset[key] = a end
+                end
+            end
+        end
+    end
+end)()
+
 local Tabs = {
-    Info            = Window:AddTab({ Name = '信息',     Icon = 'info' }),
-    Combat          = Window:AddTab({ Name = '战斗',     Icon = 'sword' }),
-    Visuals         = Window:AddTab({ Name = '视觉',     Icon = 'eye' }),
-    Movement        = Window:AddTab({ Name = '移动',     Icon = 'move' }),
-    Misc            = Window:AddTab({ Name = '杂项',     Icon = 'package' }),
-    ['UI Settings'] = Window:AddTab({ Name = '界面设置', Icon = 'settings' }),
+    Info            = Window:AddTab({ Name = '信息',     Icon = _G.WXIconFor('info') }),
+    Combat          = Window:AddTab({ Name = '战斗',     Icon = _G.WXIconFor('sword') }),
+    Visuals         = Window:AddTab({ Name = '视觉',     Icon = _G.WXIconFor('eye') }),
+    Movement        = Window:AddTab({ Name = '移动',     Icon = _G.WXIconFor('move') }),
+    Misc            = Window:AddTab({ Name = '杂项',     Icon = _G.WXIconFor('package') }),
+    ['UI Settings'] = Window:AddTab({ Name = '界面设置', Icon = _G.WXIconFor('settings') }),
 }
 
 -- ====================== 信息页（第一个标签页，布局取自 Revenant 的信息主页） ======================
@@ -33592,36 +33677,6 @@ Options.BgOpacity = MenuGroup:AddSlider('BgOpacity', {
 
 
 Library.ToggleKeybind = Options.MenuKeybind
-
--- 标签图标颜色（自绘矢量图标专用；关闭时跟随主题强调色）
-;(function()
-    -- 整段包 pcall：万一这里再出 API 问题，也绝不能连累后面的「配置」等分组
-    local ok, err = pcall(function()
-    local IconGroup = Tabs['UI Settings']:AddRightGroupbox('标签图标')
-    Toggles.TabIconCustom = IconGroup:AddToggle('TabIconCustom', {
-        Text = '自定义图标颜色',
-        Default = false,
-        Tooltip = '关闭时跟随主题强调色；开启后用下面的颜色替换侧栏标签图标',
-    })
-    Options.TabIconColor = IconGroup:AddLabel('图标颜色'):AddColorPicker('TabIconColor', {
-        Default = Color3.fromRGB(139, 123, 245),
-        Title = '图标颜色',
-    })
-
-    local function ApplyIconColor()
-        local on = Toggles.TabIconCustom and Toggles.TabIconCustom.Value
-        local c = Options.TabIconColor and Options.TabIconColor.Value
-        Library:SetBuiltinTabIconColor(on and c or nil)
-    end
-
-    Toggles.TabIconCustom:OnChanged(ApplyIconColor)
-    Options.TabIconColor:OnChanged(ApplyIconColor)
-    ApplyIconColor()   -- 读档后先同步一次，避免开关是开的但图标还是主题色
-    end)
-    if not ok then
-        warn('[WX] 标签图标颜色 UI 创建失败，已跳过：' .. tostring(err))
-    end
-end)()
 
 pcall(function()
     if Library.KeybindFrame then
