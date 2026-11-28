@@ -2,7 +2,7 @@ local WX_OK, WX_ERR = pcall(function()
 
 -- 重复执行时先清掉旧界面，避免叠层
 do
-	print('[WX] YZ HUB 开始注入 (build 11-28n)')
+	print('[WX] YZ HUB 开始注入 (build 11-28o)')
 	local hosts = {}
 	local ok, h = pcall(function() return gethui and gethui() end)
 	if ok and h then hosts[#hosts + 1] = h end
@@ -24082,7 +24082,7 @@ end
 
         local Strength = Tab:AddSlider('MotionCameraStrength', {
             Text = '惯性强度', Default = 55, Min = 0, Max = 100, Rounding = 0, Compact = false,
-            Tooltip = '越高镜头越「拖」、回弹越明显；0 = 几乎等于原版硬跟',
+            Tooltip = '和头顶武器同一套平滑：越高越拖；0 = 几乎等于原版硬跟',
         })
         local RotInertia = Tab:AddToggle('MotionCameraRot', {
             Text = '视角惯性（转向也拖）',
@@ -24094,24 +24094,19 @@ end
         local RunService = game:GetService('RunService')
         local BIND = 'YZHUB_MotionCam'
 
-        -- 弹簧跟随（和头顶武器一个路子）：二阶阻尼系统，
-        -- 位置和「视线落点」各跑一根弹簧，再拼回 CFrame，
-        -- 比一阶 Lerp 更像「带着重量拖过去」，收尾还有极轻的回弹，不会硬邦邦。
-        local pPos, pVel = nil, Vector3.zero
-        local pLook, lVel = nil, Vector3.zero
-        local LOOK_DIST = 12     -- 视线落点距离，越大转视角的拖感越明显
+        -- 和头顶武器完全同一套：一阶指数平滑 Lerp(1 - exp(-dt * k))
+        -- 之前那版是二阶弹簧（带刚性和回弹），看着「人机」；这个才是你说的抽帧感
+        local pPos, pLook = nil, nil
+        local LOOK_DIST = 12     -- 视线落点距离，仅在「视角惯性」开启时使用
 
         local function snap(cam)
             local cf = cam.CFrame
             pPos = cf.Position
             pLook = pPos + cf.LookVector * LOOK_DIST
-            pVel = Vector3.zero
-            lVel = Vector3.zero
         end
 
         local function reset()
-            pPos, pVel = nil, Vector3.zero
-            pLook, lVel = nil, Vector3.zero
+            pPos, pLook = nil, nil
         end
 
         local function onRender(dt)
@@ -24141,32 +24136,27 @@ end
             end
 
             local s = math.clamp((tonumber(Strength and Strength.Value) or 55) / 100, 0, 1)
-            -- s=0 → 26（几乎硬跟）；s=1 → 3.5（拖得很明显）
-            local omega = 26 - 22.5 * s
-            local k = omega * omega
-            local c = 2 * omega * 0.92   -- 略欠阻尼：收尾有一点点回弹，但不晃
+            -- 头顶武器用的是 11；这里 0 → 30（几乎硬跟），100 → 5（拖得很明显）
+            local k = 30 - 25 * s
+            local a = 1 - math.exp(-dt * k)
 
-            local function spring(cur, vel, goal)
-                local acc = (goal - cur) * k - vel * c
-                vel = vel + acc * dt
-                cur = cur + vel * dt
-                return cur, vel
-            end
+            pPos = pPos:Lerp(target.Position, a)
 
-            pPos, pVel = spring(pPos, pVel, target.Position)
-
-            -- 视角惯性关闭时，转向直接跟原相机（不加延迟），只保留位移的弹簧延迟
             local dir = target.LookVector
             if RotInertia and RotInertia.Value then
                 local goalLook = target.Position + target.LookVector * LOOK_DIST
-                pLook, lVel = spring(pLook, lVel, goalLook)
+                if not pLook then
+                    pLook = goalLook
+                end
+                pLook = pLook:Lerp(goalLook, a)
                 local d = pLook - pPos
                 if d.Magnitude > 0.05 then
                     dir = d.Unit
                 end
             else
-                pLook, lVel = nil, Vector3.zero
+                pLook = nil
             end
+
             cam.CFrame = CFrame.lookAt(pPos, pPos + dir, target.UpVector)
         end
 
