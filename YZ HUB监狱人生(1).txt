@@ -2,7 +2,7 @@ local WX_OK, WX_ERR = pcall(function()
 
 -- 重复执行时先清掉旧界面，避免叠层
 do
-	print('[WX] YZ HUB 开始注入 (build 11-28o)')
+	print('[WX] YZ HUB 开始注入 (build 11-28q)')
 	local hosts = {}
 	local ok, h = pcall(function() return gethui and gethui() end)
 	if ok and h then hosts[#hosts + 1] = h end
@@ -19431,6 +19431,10 @@ local isAlive, getConfig, updateHudAmmo
 
 -- 注入动画在所有界面构建完成后再播放（见文件末尾），这里只先标记，让 HUD 暂时不显示
 _G.YZIntroActive = true
+-- 重置上一轮留下的标记：YZIntroDone 是全局的，不清掉的话第二次注入会直接跳过动画
+_G.YZIntroDone = false
+_G.YZIntroStarted = false
+_G.YZIntroStartTime = nil
 
 -- 看门狗：不管后面哪个模块报错，8 秒后都强制把主界面打开，避免「UI 打不开 + 视角卡住」
 _G.WXForceFinishIntro = function()
@@ -19464,8 +19468,14 @@ task.delay(8, function()
 end)
 
 -- 兜底：万一前面某处报错导致动画根本没机会播放，20 秒后强制收尾
+-- 但如果动画已经开始且还没播完（3.3 秒），让开，别中途把它掐掉
 task.delay(20, function()
-    pcall(_G.WXForceFinishIntro)
+    pcall(function()
+        if _G.YZIntroStarted and _G.YZIntroStartTime and (tick() - _G.YZIntroStartTime) < 12 then
+            return
+        end
+        _G.WXForceFinishIntro()
+    end)
 end)
 
 local Window = Library:CreateWindow({
@@ -24081,32 +24091,36 @@ end
         Tab:AddDivider()
 
         local Strength = Tab:AddSlider('MotionCameraStrength', {
-            Text = '惯性强度', Default = 55, Min = 0, Max = 100, Rounding = 0, Compact = false,
-            Tooltip = '和头顶武器同一套平滑：越高越拖；0 = 几乎等于原版硬跟',
+            Text = '抽帧强度', Default = 55, Min = 0, Max = 100, Rounding = 0, Compact = false,
+            Tooltip = '越高相机刷新越慢（越像掉帧），0 = 每帧都刷（等于原版）',
         })
         local RotInertia = Tab:AddToggle('MotionCameraRot', {
-            Text = '视角惯性（转向也拖）',
+            Text = '视角也抽帧（转向）',
             Default = false,
-            Tooltip = '关掉：只有位移带延迟，转向完全跟手（好瞄）；开：转视角也带惯性',
+            Tooltip = '关掉：只有位置定格，转向实时跟手（好瞄）；开：转视角也按同样帧率跳',
         })
         Tab:AddLabel('起跳、传送时会自动吸附，不会甩出很远', true)
 
         local RunService = game:GetService('RunService')
         local BIND = 'YZHUB_MotionCam'
 
-        -- 和头顶武器完全同一套：一阶指数平滑 Lerp(1 - exp(-dt * k))
-        -- 之前那版是二阶弹簧（带刚性和回弹），看着「人机」；这个才是你说的抽帧感
-        local pPos, pLook = nil, nil
-        local LOOK_DIST = 12     -- 视线落点距离，仅在「视角惯性」开启时使用
+        -- 「抽帧」：相机不每帧更新，而是按住上一次采样值，攒够一个间隔才跳到新位置。
+        -- 60fps 下强度 55 ≈ 32Hz 刷新（每两帧动一次），所以画面会少掉一部分位移，
+        -- 但每次跳的幅度很小，看起来是那种轻微的卡帧/定格感。
+        local acc = 0
+        local heldPos = nil
+        local heldDir = nil
 
         local function snap(cam)
             local cf = cam.CFrame
-            pPos = cf.Position
-            pLook = pPos + cf.LookVector * LOOK_DIST
+            heldPos = cf.Position
+            heldDir = cf.LookVector
+            acc = 0
         end
 
         local function reset()
-            pPos, pLook = nil, nil
+            heldPos, heldDir = nil, nil
+            acc = 0
         end
 
         local function onRender(dt)
@@ -24125,39 +24139,31 @@ end
             end
 
             local target = cam.CFrame
-            if not pPos then
+            if not heldPos then
                 snap(cam)
                 return
             end
             -- 传送 / 复活：位置突变直接吸附，避免镜头一路飞过去
-            if (target.Position - pPos).Magnitude > 60 then
+            if (target.Position - heldPos).Magnitude > 60 then
                 snap(cam)
                 return
             end
 
             local s = math.clamp((tonumber(Strength and Strength.Value) or 55) / 100, 0, 1)
-            -- 头顶武器用的是 11；这里 0 → 30（几乎硬跟），100 → 5（拖得很明显）
-            local k = 30 - 25 * s
-            local a = 1 - math.exp(-dt * k)
+            local rate = 60 - 50 * s          -- 60Hz（不抽）→ 10Hz（抽得很明显）
+            local interval = 1 / rate
 
-            pPos = pPos:Lerp(target.Position, a)
-
-            local dir = target.LookVector
-            if RotInertia and RotInertia.Value then
-                local goalLook = target.Position + target.LookVector * LOOK_DIST
-                if not pLook then
-                    pLook = goalLook
-                end
-                pLook = pLook:Lerp(goalLook, a)
-                local d = pLook - pPos
-                if d.Magnitude > 0.05 then
-                    dir = d.Unit
-                end
-            else
-                pLook = nil
+            acc = acc + dt
+            if acc >= interval then
+                acc = 0                        -- 到点采样一次，然后重新计数
+                heldPos = target.Position
+                heldDir = target.LookVector
             end
 
-            cam.CFrame = CFrame.lookAt(pPos, pPos + dir, target.UpVector)
+            -- 转向：默认实时跟手，不参与定格；开了「视角也抽帧」才一起定格
+            local dir = (RotInertia and RotInertia.Value) and heldDir or target.LookVector
+
+            cam.CFrame = CFrame.lookAt(heldPos, heldPos + dir, target.UpVector)
         end
 
         pcall(function()
@@ -41544,6 +41550,7 @@ end
     end
     _G.YZIntroDone = true
     _G.YZIntroStarted = true   -- 告诉看门狗：动画真的开始了，可以按超时逻辑收尾了
+    _G.YZIntroStartTime = tick()
 
     local Lighting = game:GetService('Lighting')
 
