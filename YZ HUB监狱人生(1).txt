@@ -2,7 +2,7 @@ local WX_OK, WX_ERR = pcall(function()
 
 -- 重复执行时先清掉旧界面，避免叠层
 do
-	print('[WX] YZ HUB 开始注入 (build 11-27k)')
+	print('[WX] YZ HUB 开始注入 (build 11-28a)')
 	local hosts = {}
 	local ok, h = pcall(function() return gethui and gethui() end)
 	if ok and h then hosts[#hosts + 1] = h end
@@ -19433,26 +19433,39 @@ local isAlive, getConfig, updateHudAmmo
 _G.YZIntroActive = true
 
 -- 看门狗：不管后面哪个模块报错，8 秒后都强制把主界面打开，避免「UI 打不开 + 视角卡住」
+_G.WXForceFinishIntro = function()
+    if _G.YZIntroActive then
+        _G.YZIntroActive = false
+        if _G.YZIntroGui then
+            pcall(function() _G.YZIntroGui:Destroy() end)
+            _G.YZIntroGui = nil
+        end
+        if _G.YZIntroBlur then
+            pcall(function() _G.YZIntroBlur:Destroy() end)
+            _G.YZIntroBlur = nil
+        end
+    end
+    if _G.YZApplyHudSettings then
+        pcall(_G.YZApplyHudSettings)
+    end
+    if Library and Library.Toggled == false then
+        Library:Toggle(true)
+    end
+end
+
 task.delay(8, function()
     pcall(function()
-        if _G.YZIntroActive then
-            _G.YZIntroActive = false
-            if _G.YZIntroGui then
-                pcall(function() _G.YZIntroGui:Destroy() end)
-                _G.YZIntroGui = nil
-            end
-            if _G.YZIntroBlur then
-                pcall(function() _G.YZIntroBlur:Destroy() end)
-                _G.YZIntroBlur = nil
-            end
+        -- 动画还没开始 = 界面还在构建（图标下载等），这时绝不能抢在动画前面把菜单弹出来
+        if _G.YZIntroActive and not _G.YZIntroStarted then
+            return
         end
-        if _G.YZApplyHudSettings then
-            pcall(_G.YZApplyHudSettings)
-        end
-        if Library and Library.Toggled == false then
-            Library:Toggle(true)
-        end
+        _G.WXForceFinishIntro()
     end)
+end)
+
+-- 兜底：万一前面某处报错导致动画根本没机会播放，20 秒后强制收尾
+task.delay(20, function()
+    pcall(_G.WXForceFinishIntro)
 end)
 
 local Window = Library:CreateWindow({
@@ -20969,11 +20982,11 @@ _G.WXTabIconAsset = _G.WXTabIconAsset or {}
     -- ↓↓↓ 图标直链：想换哪个改哪行，留空 = 用内置图标
     local URLS = {
         info     = 'https://img.remit.ee/i/f1WaqbL2t9KF',  -- 人物
-        sword    = 'https://img.remit.ee/i/EdFa8UPpfFd4',  -- 圆环 + 十字（战斗）
-        eye      = 'https://img.remit.ee/i/F3KGrnXg1xtu',  -- 图片框（视觉）
-        move     = 'https://img.remit.ee/i/2fY37CvSCJUk',  -- 四向箭头（移动）
-        package  = 'https://img.remit.ee/i/dqL8As38udUW',  -- 双行滑块（杂项）
-        settings = 'https://img.remit.ee/i/YGMjm0MDShIN',  -- 齿轮（界面设置）
+        sword    = '',                                     -- 瞄准图标：等你上传后填链接
+        eye      = 'https://img.remit.ee/i/F3KGrnXg1xtu',  -- 图片框
+        move     = '',                                     -- 跑步的人：等你上传后填链接
+        package  = 'https://img.remit.ee/i/dqL8As38udUW',  -- 双行滑块
+        settings = 'https://img.remit.ee/i/YGMjm0MDShIN',  -- 齿轮
     }
 
     -- 统一入口：拿到网页图就给 asset，否则回退内置图标名
@@ -21024,7 +21037,7 @@ _G.WXTabIconAsset = _G.WXTabIconAsset or {}
 
     for key, url in pairs(URLS) do
         -- 总超时 8 秒：网络不通时不能把加载卡住
-        if os.clock() - startClock > 8 then break end
+        if os.clock() - startClock > 4 then break end
 
         if type(url) == 'string' and #url > 10 then
             local path = DIR .. '/' .. key .. '.' .. extOf(url)
@@ -41329,6 +41342,7 @@ end
         return
     end
     _G.YZIntroDone = true
+    _G.YZIntroStarted = true   -- 告诉看门狗：动画真的开始了，可以按超时逻辑收尾了
 
     local Lighting = game:GetService('Lighting')
 
