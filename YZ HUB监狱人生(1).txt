@@ -2,7 +2,7 @@ local WX_OK, WX_ERR = pcall(function()
 
 -- 重复执行时先清掉旧界面，避免叠层
 do
-	print('[WX] YZ HUB 开始注入 (build 11-28g)')
+	print('[WX] YZ HUB 开始注入 (build 11-28h)')
 	local hosts = {}
 	local ok, h = pcall(function() return gethui and gethui() end)
 	if ok and h then hosts[#hosts + 1] = h end
@@ -24086,6 +24086,8 @@ end
 -- 相机脱离角色：WASD 平移、空格/Ctrl 升降、鼠标（或拖动屏幕）转视角。
 -- 关掉立刻回到角色视角；整段包在 IIFE 里，不占主 chunk 的 local。
 ;(function()
+    -- 整段包 pcall：就算这个页签建不出来，也绝不能拖垮整个脚本的加载
+    local ok, err = pcall(function()
     -- MoveBox 是移动页块内的 local，块外只能通过 _G 拿；拿不到就自己建一个
     local CamBox = rawget(_G, 'WXMoveBox')
     if not CamBox then
@@ -24234,6 +24236,10 @@ end
     pcall(function()
         Library:OnUnload(stopCam)
     end)
+    end)
+    if not ok then
+        warn('[WX] 移动相机模块创建失败，已跳过：' .. tostring(err))
+    end
 end)()
 
 -- ====================== Wallbang（穿墙射击） ======================
