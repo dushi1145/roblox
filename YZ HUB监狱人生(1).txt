@@ -2,7 +2,7 @@ local WX_OK, WX_ERR = pcall(function()
 
 -- 重复执行时先清掉旧界面，避免叠层
 do
-	print('[WX] YZ HUB 开始注入 (build 11-28a)')
+	print('[WX] YZ HUB 开始注入 (build 11-28c)')
 	local hosts = {}
 	local ok, h = pcall(function() return gethui and gethui() end)
 	if ok and h then hosts[#hosts + 1] = h end
@@ -24219,6 +24219,14 @@ local rootPos = root.Position
 
     for _, player in Players:GetPlayers() do
         if IsValidTarget(player) then
+            -- 队友保护：这个开关以前只是摆设（定义在 UI 里但没人读），静默自瞄照样锁队友。
+            -- 默认开；关掉就恢复「谁都锁」。
+            local teamProtected = not (Toggles.SilentAimTeamCheck and Toggles.SilentAimTeamCheck.Value == false)
+            if teamProtected and player.Team and LP.Team
+                and (player.Team == LP.Team or (LP.Team.Name ~= '' and player.Team.Name == LP.Team.Name)) then
+                continue
+            end
+
             local char = player.Character
             local inVeh = isInVehicle(player)
             local part = (inVeh and (char:FindFirstChild('Head') or char:FindFirstChild('HumanoidRootPart')))
@@ -36811,7 +36819,7 @@ end)()
         local stroke = Instance.new('UIStroke')
         stroke.Color = Color3.fromRGB(58, 62, 74)
         stroke.Thickness = 1
-        stroke.Transparency = 0.25
+        stroke.Transparency = 1   -- 不要那圈白边：完全透明，只留阴影
         stroke.Parent = card
 
         ------------------------------------------------------------------
@@ -38123,9 +38131,10 @@ end)()
         pcall(apply)
     end)
 
-    -- 每 0.4 秒检查头顶有没有遮挡，进屋 / 进掩体自动停雨停雪
+    -- 每 0.3 秒检查头顶有没有遮挡，进屋 / 进掩体自动停雨停雪
     local shelterParams = RaycastParams.new()
     shelterParams.FilterType = Enum.RaycastFilterType.Exclude
+    local wasSheltered = false
     task.spawn(function()
         while true do
             task.wait(0.3)
@@ -38145,15 +38154,41 @@ end)()
                     end
                 end
                 shelterParams.FilterDescendantsInstances = ex
-                -- 空中（飞 / 跳 / 掉）一律不算被遮挡，否则飞过屋顶就会整个停雪
+
                 local hum = char:FindFirstChildOfClass('Humanoid')
                 if hum and hum.FloorMaterial == Enum.Material.Air then
+                    -- 空中（飞 / 跳 / 掉）一律不算被遮挡，否则飞过屋顶就会整个停雪
                     sheltered = false
                 else
-                    -- 从头顶往上 60 格：有东西挡住就算在屋里/掩体下
-                    local hit = Workspace:Raycast(root.Position + Vector3.new(0, 3, 0), Vector3.new(0, 60, 0), shelterParams)
-                    sheltered = (hit ~= nil)
+                    -- 从高空往下打：命中点明显高于头顶才算真的被挡住（80 格内的天花板都能覆盖）
+                    local function covered(offset)
+                        local origin = root.Position + offset + Vector3.new(0, 80, 0)
+                        local hit = Workspace:Raycast(origin, Vector3.new(0, -80, 0), shelterParams)
+                        return hit ~= nil and hit.Position.Y > root.Position.Y + 4
+                    end
+
+                    -- 五点采样：站在大屋顶边上只压到一两点时不算完全进屋，避免边缘乱闪
+                    local hits = 0
+                    if covered(Vector3.zero) then hits = hits + 1 end
+                    if covered(Vector3.new(14, 0, 0)) then hits = hits + 1 end
+                    if covered(Vector3.new(-14, 0, 0)) then hits = hits + 1 end
+                    if covered(Vector3.new(0, 0, 14)) then hits = hits + 1 end
+                    if covered(Vector3.new(0, 0, -14)) then hits = hits + 1 end
+                    sheltered = hits >= 3
                 end
+
+                -- 刚进屋：把空中残留的雨丝 / 雪花立刻清掉，
+                -- 否则雪的生命周期有 5~8 秒，进屋后还会继续「穿透」屋顶飘一阵
+                if sheltered ~= wasSheltered then
+                    wasSheltered = sheltered
+                    if sheltered then
+                        pcall(function()
+                            if rainE then rainE:Clear() end
+                            if snowE then snowE:Clear() end
+                        end)
+                    end
+                end
+
                 pcall(apply)
             end
         end
@@ -38694,6 +38729,103 @@ end)()
         UIS.WindowFocusReleased:Connect(function()
             for _, item in ipairs(anim) do
                 item.target = 0
+            end
+        end)
+    end
+
+    ----------------------------------------------------------------------
+    -- 手机端适配：没有物理键盘
+    --   移动 = 摇杆方向（转到相机空间后点亮 W/A/S/D）
+    --   跳跃 = Humanoid 状态 Jumping / 起跳瞬间
+    --   左键 = 点屏幕（短按没拖动）；右键 = 拖屏转视角
+    ----------------------------------------------------------------------
+    if UIS.TouchEnabled then
+        local holding = {}
+        local touchActive, dragLook, touchStartAt = false, false, 0
+        local touchOnGui = false
+        local lastLook = nil
+        local jumpUntil, lmbUntil = 0, 0
+
+        local function hold(id, on)
+            on = on and true or false
+            if holding[id] == on then
+                return
+            end
+            holding[id] = on
+            if on then
+                press(id)
+            else
+                release(id)
+            end
+        end
+
+        UIS.InputBegan:Connect(function(input, gp)
+            if input.UserInputType == Enum.UserInputType.Touch then
+                touchActive, dragLook, touchStartAt = true, false, tick()
+                touchOnGui = (gp == true)   -- 按在菜单/按钮上的点，不算「点屏幕开枪」
+                lastLook = Workspace.CurrentCamera and Workspace.CurrentCamera.CFrame.LookVector
+            end
+        end)
+
+        UIS.InputChanged:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.Touch and touchActive then
+                local cam = Workspace.CurrentCamera
+                if cam then
+                    if lastLook and (cam.CFrame.LookVector - lastLook).Magnitude > 0.004 then
+                        dragLook = true
+                    end
+                    lastLook = cam.CFrame.LookVector
+                end
+            end
+        end)
+
+        UIS.InputEnded:Connect(function(input)
+            if input.UserInputType ~= Enum.UserInputType.Touch then
+                return
+            end
+            -- 短按且视角没动 = 点屏幕 = 左键
+            if not dragLook and (tick() - touchStartAt) < 0.45 then
+                lmbUntil = tick() + 0.12
+                holding['LMB'] = true
+                press('LMB')
+            end
+            touchActive, dragLook = false, false
+            lastLook = nil
+        end)
+
+        RunService.RenderStepped:Connect(function()
+            if not (Toggles.KeyDisplay and Toggles.KeyDisplay.Value) then
+                return
+            end
+            local char = LP.Character
+            local hum = char and char:FindFirstChildOfClass('Humanoid')
+            local cam = Workspace.CurrentCamera
+            if not hum or not cam then
+                return
+            end
+
+            -- 摇杆方向 → W/A/S/D（按相机朝向换算，往哪走亮哪个）
+            local md = hum.MoveDirection
+            local moving = md.Magnitude > 0.15
+            local rel = cam.CFrame:VectorToObjectSpace(md)
+            hold('W', moving and rel.Z < -0.35)
+            hold('S', moving and rel.Z > 0.35)
+            hold('A', moving and rel.X < -0.35)
+            hold('D', moving and rel.X > 0.35)
+
+            -- 跳跃：状态跳到 Jumping，或者离地后往上冲
+            local st = hum:GetState()
+            local root = char:FindFirstChild('HumanoidRootPart')
+            local vy = root and root.AssemblyLinearVelocity.Y or 0
+            if st == Enum.HumanoidStateType.Jumping or (st == Enum.HumanoidStateType.Freefall and vy > 6) then
+                jumpUntil = tick() + 0.2
+            end
+            hold('Space', tick() < jumpUntil)
+
+            -- 拖屏 = 右键；点屏 = 左键（0.12 秒脉冲）
+            hold('RMB', touchActive and dragLook)
+            if tick() >= lmbUntil and holding['LMB'] then
+                hold('LMB', false)
             end
         end)
     end
