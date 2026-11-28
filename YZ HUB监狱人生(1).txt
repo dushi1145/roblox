@@ -2,7 +2,7 @@ local WX_OK, WX_ERR = pcall(function()
 
 -- 重复执行时先清掉旧界面，避免叠层
 do
-	print('[WX] YZ HUB 开始注入 (build 11-28h)')
+	print('[WX] YZ HUB 开始注入 (build 11-28i)')
 	local hosts = {}
 	local ok, h = pcall(function() return gethui and gethui() end)
 	if ok and h then hosts[#hosts + 1] = h end
@@ -24093,14 +24093,14 @@ end
     if not CamBox then
         CamBox = Tabs.Movement:AddLeftTabbox()
     end
-    local Cam_Tab = CamBox:AddTab('移动相机')
+    local Cam_Tab = CamBox:AddTab('自由相机')
 
     local Toggle = Cam_Tab:AddToggle('MoveCamera', {
-        Text = '启用移动相机',
+        Text = '启用自由相机',
         Default = false,
-        Tooltip = '相机脱离角色自由飞：WASD 平移，空格升 / Ctrl 降，鼠标或拖动屏幕转视角',
+        Tooltip = '相机脱离角色自由飞：WASD 平移，空格升 / Ctrl 降，鼠标或拖动屏幕转视角（和「运动相机」不是一回事）',
     })
-    Toggle:AddKeyPicker('MoveCameraBind', { Default = 'None', SyncToggleState = true, Modes = { 'Toggle', 'Hold' }, Text = '移动相机' })
+    Toggle:AddKeyPicker('MoveCameraBind', { Default = 'None', SyncToggleState = true, Modes = { 'Toggle', 'Hold' }, Text = '自由相机' })
     Cam_Tab:AddDivider()
 
     local Speed = Cam_Tab:AddSlider('MoveCameraSpeed', {
@@ -24239,6 +24239,102 @@ end
     end)
     if not ok then
         warn('[WX] 移动相机模块创建失败，已跳过：' .. tostring(err))
+    end
+end)()
+
+-- ====================== 运动相机（镜头惯性跟随） ======================
+-- 不去动角色，只在「相机脚本算完之后」把画面 CFrame 朝目标慢慢 Lerp 过去，
+-- 于是跑动 / 转身时镜头会带一点拖尾，而不是硬贴着人物。
+;(function()
+    local ok, err = pcall(function()
+        local box = rawget(_G, 'WXMoveBox') or Tabs.Movement:AddLeftTabbox()
+        local Tab = box:AddTab('运动相机')
+
+        local Toggle = Tab:AddToggle('MotionCamera', {
+            Text = '启用运动相机',
+            Default = false,
+            Tooltip = '镜头带惯性跟随：跑动、转身、起跳时镜头会拖一下再跟上',
+        })
+        Toggle:AddKeyPicker('MotionCameraBind', {
+            Default = 'None', SyncToggleState = true, Modes = { 'Toggle', 'Hold' }, Text = '运动相机',
+        })
+        Tab:AddDivider()
+
+        local Strength = Tab:AddSlider('MotionCameraStrength', {
+            Text = '惯性强度', Default = 55, Min = 0, Max = 100, Rounding = 0, Compact = false,
+            Tooltip = '越高镜头越「拖」；0 = 关闭惯性（和原版一样硬跟）',
+        })
+        Tab:AddLabel('转向、起跳、传送时会自动吸附，不会甩出很远', true)
+
+        local RunService = game:GetService('RunService')
+        local BIND = 'YZHUB_MotionCam'
+        local smoothed = nil
+
+        local function reset()
+            smoothed = nil
+        end
+
+        local function onRender(dt)
+            if not (Toggle and Toggle.Value) then
+                smoothed = nil
+                return
+            end
+            local cam = workspace.CurrentCamera
+            if not cam then
+                return
+            end
+            -- 自由相机 / 脚本接管相机时不介入，免得两边抢 CFrame
+            if cam.CameraType ~= Enum.CameraType.Custom then
+                smoothed = nil
+                return
+            end
+
+            local target = cam.CFrame
+            if not smoothed then
+                smoothed = target
+                return
+            end
+            -- 传送 / 复活：位置突变就直接吸附，避免镜头一路飞过去
+            if (target.Position - smoothed.Position).Magnitude > 60 then
+                smoothed = target
+                return
+            end
+
+            local strength = tonumber(Strength and Strength.Value) or 55
+            strength = math.clamp(strength / 100, 0, 1)
+            -- 强度 100 → 响应系数 2（明显拖尾）；0 → 26（几乎瞬跟）
+            local resp = 26 - 24 * strength
+            local alpha = 1 - math.exp(-resp * dt)
+            smoothed = smoothed:Lerp(target, alpha)
+            cam.CFrame = smoothed
+        end
+
+        pcall(function()
+            RunService:UnbindFromRenderStep(BIND)
+        end)
+        -- 绑在相机优先级之后：先让游戏把相机算好，我们再叠一层惯性
+        RunService:BindToRenderStep(BIND, Enum.RenderPriority.Camera.Value + 5, function(dt)
+            pcall(onRender, math.clamp(dt, 0.001, 0.1))
+        end)
+
+        Toggle:OnChanged(function(v)
+            if v then
+                smoothed = nil
+            end
+        end)
+        Strength:OnChanged(reset)
+        LP.CharacterAdded:Connect(reset)
+
+        pcall(function()
+            Library:OnUnload(function()
+                pcall(function()
+                    RunService:UnbindFromRenderStep(BIND)
+                end)
+            end)
+        end)
+    end)
+    if not ok then
+        warn('[WX] 运动相机模块创建失败，已跳过：' .. tostring(err))
     end
 end)()
 
