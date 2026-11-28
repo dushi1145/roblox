@@ -2,7 +2,7 @@ local WX_OK, WX_ERR = pcall(function()
 
 -- 重复执行时先清掉旧界面，避免叠层
 do
-	print('[WX] YZ HUB 开始注入 (build 11-28k)')
+	print('[WX] YZ HUB 开始注入 (build 11-28l)')
 	local hosts = {}
 	local ok, h = pcall(function() return gethui and gethui() end)
 	if ok and h then hosts[#hosts + 1] = h end
@@ -24074,6 +24074,7 @@ end
         CamBox = Tabs.Movement:AddLeftTabbox()
     end
     local Cam_Tab = CamBox:AddTab('自由相机')
+    print('[WX] 自由相机已挂到：移动 → 自由相机')
 
     local Toggle = Cam_Tab:AddToggle('MoveCamera', {
         Text = '启用自由相机',
@@ -24229,6 +24230,7 @@ end)()
     local ok, err = pcall(function()
         local box = rawget(_G, 'WXMoveBox') or Tabs.Movement:AddLeftTabbox()
         local Tab = box:AddTab('运动相机')
+        print('[WX] 运动相机已挂到：移动 → 运动相机')
 
         local Toggle = Tab:AddToggle('MotionCamera', {
             Text = '启用运动相机',
